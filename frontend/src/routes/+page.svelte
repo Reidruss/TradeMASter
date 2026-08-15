@@ -7,10 +7,10 @@
 </script>
 
 <svelte:head>
-	<title>DotnetSvelte — Modern Full-Stack Template</title>
+	<title>TradeMASter — ASP.NET Core & SvelteKit</title>
 	<meta
 		name="description"
-		content="Turnkey full-stack template combining ASP.NET Core Minimal APIs with SvelteKit and Svelte 5 runes."
+		content="Full-stack application combining ASP.NET Core Minimal APIs with SvelteKit and Svelte 5."
 	/>
 </svelte:head>
 

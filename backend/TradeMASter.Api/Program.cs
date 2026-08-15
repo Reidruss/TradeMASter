@@ -1,5 +1,5 @@
-using DotnetSvelte.Api.Endpoints;
-using DotnetSvelte.Api.Services;
+using TradeMASter.Api.Endpoints;
+using TradeMASter.Api.Services;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,7 +31,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
     app.MapScalarApiReference(options =>
     {
-        options.WithTitle("DotnetSvelte API Reference")
+        options.WithTitle("TradeMASter API Reference")
                .WithTheme(ScalarTheme.Moon);
     });
     app.UseCors(DevCorsPolicy);
@@ -53,7 +53,7 @@ app.MapTodoEndpoints();
 // Root landing endpoint if accessed directly via browser
 app.MapGet("/", () => Results.Json(new
 {
-    name = "DotnetSvelte API",
+    name = "TradeMASter API",
     status = "Online",
     docs = "/scalar/v1",
     endpoints = new[] { "/api/health", "/api/weather/forecast", "/api/todos" }

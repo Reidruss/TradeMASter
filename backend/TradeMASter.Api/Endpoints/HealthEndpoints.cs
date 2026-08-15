@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using DotnetSvelte.Api.Models;
+using TradeMASter.Api.Models;
 
-namespace DotnetSvelte.Api.Endpoints;
+namespace TradeMASter.Api.Endpoints;
 
 public static class HealthEndpoints
 {

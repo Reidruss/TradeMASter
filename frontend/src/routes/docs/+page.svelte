@@ -3,8 +3,8 @@
 </script>
 
 <svelte:head>
-	<title>Scalar API Reference — DotnetSvelte</title>
-	<meta name="description" content="Interactive OpenAPI & Scalar API reference for DotnetSvelte backend" />
+	<title>Scalar API Reference — TradeMASter</title>
+	<meta name="description" content="Interactive OpenAPI & Scalar API reference for TradeMASter backend" />
 </svelte:head>
 
 <div class="docs-container">

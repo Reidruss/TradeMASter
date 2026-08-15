@@ -1,7 +1,7 @@
-using DotnetSvelte.Api.Models;
-using DotnetSvelte.Api.Services;
+using TradeMASter.Api.Models;
+using TradeMASter.Api.Services;
 
-namespace DotnetSvelte.Api.Endpoints;
+namespace TradeMASter.Api.Endpoints;
 
 public static class TodoEndpoints
 {

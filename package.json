@@ -1,16 +1,16 @@
 {
-  "name": "dotnet-svelte-template",
+  "name": "trademaster",
   "version": "1.0.0",
   "private": true,
-  "description": "Full-stack template for ASP.NET Core Minimal API backend and SvelteKit frontend",
+  "description": "Full-stack ASP.NET Core Minimal API backend and SvelteKit frontend for TradeMASter",
   "scripts": {
     "dev": "concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "cross-env DOTNET_USE_POLLING_FILE_WATCHER=true dotnet watch --non-interactive --project backend/DotnetSvelte.Api",
+    "dev:backend": "cross-env DOTNET_USE_POLLING_FILE_WATCHER=true dotnet watch --non-interactive --project backend/TradeMASter.Api",
     "dev:frontend": "npm run dev --prefix frontend",
     "build": "npm run build:frontend && npm run build:backend",
     "build:frontend": "npm run build --prefix frontend",
-    "build:backend": "dotnet build backend/DotnetSvelte.slnx -c Release",
-    "publish:backend": "dotnet publish backend/DotnetSvelte.Api -c Release -o dist/backend",
+    "build:backend": "dotnet build backend/TradeMASter.slnx -c Release",
+    "publish:backend": "dotnet publish backend/TradeMASter.Api -c Release -o dist/backend",
     "check": "npm run check --prefix frontend"
   },
   "devDependencies": {

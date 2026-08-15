@@ -6,9 +6,9 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build-backend",
-      "program": "${workspaceFolder}/backend/DotnetSvelte.Api/bin/Debug/net10.0/DotnetSvelte.Api.dll",
+      "program": "${workspaceFolder}/backend/TradeMASter.Api/bin/Debug/net10.0/TradeMASter.Api.dll",
       "args": [],
-      "cwd": "${workspaceFolder}/backend/DotnetSvelte.Api",
+      "cwd": "${workspaceFolder}/backend/TradeMASter.Api",
       "stopAtEntry": false,
       "serverReadyAction": {
         "action": "openExternally",

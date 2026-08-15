@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
-using DotnetSvelte.Api.Models;
+using TradeMASter.Api.Models;
 
-namespace DotnetSvelte.Api.Services;
+namespace TradeMASter.Api.Services;
 
 public class InMemoryTodoService : ITodoService
 {
@@ -22,7 +22,7 @@ public class InMemoryTodoService : ITodoService
         var sample2 = new TodoItem(
             Guid.NewGuid(),
             "Inspect .NET 10 Minimal APIs",
-            "Review backend/DotnetSvelte.Api/Endpoints and Program.cs",
+            "Review backend/TradeMASter.Api/Endpoints and Program.cs",
             true,
             DateTime.UtcNow.AddHours(-2),
             null

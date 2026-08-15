@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Todos CRUD — DotnetSvelte Template</title>
+	<title>Todos CRUD — TradeMASter</title>
 	<meta name="description" content="Full RESTful CRUD operations with .NET Minimal APIs and SvelteKit" />
 </svelte:head>
 
@@ -25,7 +25,7 @@
 				<strong>Vite Proxy:</strong> In dev mode, requests to <code>/api/todos</code> are automatically proxied to <code>http://localhost:5126/api/todos</code>.
 			</li>
 			<li>
-				<strong>Backend:</strong> <code>backend/DotnetSvelte.Api/Endpoints/TodoEndpoints.cs</code> maps Minimal API route handlers.
+				<strong>Backend:</strong> <code>backend/TradeMASter.Api/Endpoints/TodoEndpoints.cs</code> maps Minimal API route handlers.
 			</li>
 		</ul>
 	</div>

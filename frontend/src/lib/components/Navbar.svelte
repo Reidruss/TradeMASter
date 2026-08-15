@@ -13,8 +13,8 @@
 				<span class="badge-svelte">Svelte</span>
 			</div>
 			<div class="brand-text">
-				<span class="brand-title">DotnetSvelte</span>
-				<span class="brand-sub">Full-Stack Template</span>
+				<span class="brand-title">TradeMASter</span>
+				<span class="brand-sub">Full-Stack Application</span>
 			</div>
 		</a>
 

@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Weather Forecast — DotnetSvelte Template</title>
+	<title>Weather Forecast — TradeMASter</title>
 	<meta name="description" content="Weather forecast API example querying .NET Minimal API endpoint" />
 </svelte:head>
 
@@ -18,7 +18,7 @@
 	<div class="card doc-callout">
 		<h3>Endpoint Details:</h3>
 		<p class="mb-2">
-			The endpoint is defined in <code>backend/DotnetSvelte.Api/Endpoints/WeatherEndpoints.cs</code> and supports a <code>days</code> query parameter:
+			The endpoint is defined in <code>backend/TradeMASter.Api/Endpoints/WeatherEndpoints.cs</code> and supports a <code>days</code> query parameter:
 		</p>
 		<pre class="code-block"><code>GET /api/weather/forecast?days=7</code></pre>
 	</div>

@@ -1,6 +1,6 @@
-# DotnetSvelte 🚀
+# TradeMASter 🚀
 
-A modern, production-ready full-stack template combining an **ASP.NET Core Minimal API** backend (.NET 10 / 9 / 8) with a reactive **SvelteKit** frontend powered by **Svelte 5 runes**.
+A modern, production-ready full-stack application combining an **ASP.NET Core Minimal API** backend (.NET 10 / 9 / 8) with a reactive **SvelteKit** frontend powered by **Svelte 5 runes**.
 
 Designed specifically for **effortless, frictionless communication** between frontend and backend in both local development and production.
 
@@ -25,9 +25,9 @@ Designed specifically for **effortless, frictionless communication** between fro
 ## 📁 Project Structure
 
 ```text
-DotnetSvelte/
+TradeMASter/
 ├── backend/
-│   ├── DotnetSvelte.Api/
+│   ├── TradeMASter.Api/
 │   │   ├── Endpoints/            # Minimal API endpoint route groups
 │   │   │   ├── HealthEndpoints.cs
 │   │   │   ├── WeatherEndpoints.cs
@@ -36,7 +36,7 @@ DotnetSvelte/
 │   │   ├── Services/             # Business logic & repository services
 │   │   ├── Program.cs            # App configuration, DI, CORS & middleware
 │   │   └── appsettings.json
-│   └── DotnetSvelte.slnx         # .NET Solution file
+│   └── TradeMASter.slnx         # .NET Solution file
 │
 ├── frontend/
 │   ├── src/
@@ -128,17 +128,17 @@ await api.delete(`/api/todos/${id}`);
 ## 📝 How to Add a New Endpoint
 
 ### Step 1: Create Backend Model & Endpoint
-Create a model in `backend/DotnetSvelte.Api/Models/Product.cs`:
+Create a model in `backend/TradeMASter.Api/Models/Product.cs`:
 ```csharp
-namespace DotnetSvelte.Api.Models;
+namespace TradeMASter.Api.Models;
 
 public record Product(Guid Id, string Name, decimal Price);
 public record CreateProductRequest(string Name, decimal Price);
 ```
 
-Add an endpoint group in `backend/DotnetSvelte.Api/Endpoints/ProductEndpoints.cs`:
+Add an endpoint group in `backend/TradeMASter.Api/Endpoints/ProductEndpoints.cs`:
 ```csharp
-namespace DotnetSvelte.Api.Endpoints;
+namespace TradeMASter.Api.Endpoints;
 
 public static class ProductEndpoints
 {
@@ -155,7 +155,7 @@ public static class ProductEndpoints
 }
 ```
 
-Register it in `backend/DotnetSvelte.Api/Program.cs`:
+Register it in `backend/TradeMASter.Api/Program.cs`:
 ```csharp
 app.MapProductEndpoints();
 ```
@@ -232,5 +232,5 @@ In any Svelte 5 component (`.svelte`):
 ### Option B: Single Host (ASP.NET Core Serves Static SvelteKit)
 1. In `frontend/svelte.config.js`, configure `@sveltejs/adapter-static`.
 2. Build frontend: `npm run build:frontend`.
-3. Copy static build artifacts to `backend/DotnetSvelte.Api/wwwroot`.
+3. Copy static build artifacts to `backend/TradeMASter.Api/wwwroot`.
 4. Run `dotnet publish`. ASP.NET Core will serve the static SPA and API from a single port with fallback routing.

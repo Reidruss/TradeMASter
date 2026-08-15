@@ -1,6 +1,6 @@
-using DotnetSvelte.Api.Models;
+using TradeMASter.Api.Models;
 
-namespace DotnetSvelte.Api.Services;
+namespace TradeMASter.Api.Services;
 
 public interface ITodoService
 {

@@ -1,4 +1,4 @@
-namespace DotnetSvelte.Api.Models;
+namespace TradeMASter.Api.Models;
 
 public record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {

@@ -1,4 +1,4 @@
-namespace DotnetSvelte.Api.Models;
+namespace TradeMASter.Api.Models;
 
 public record TodoItem(
     Guid Id,

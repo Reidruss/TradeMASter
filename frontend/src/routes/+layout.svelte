@@ -17,7 +17,7 @@
 	<footer class="app-footer">
 		<div class="container footer-content">
 			<div class="footer-left">
-				<span>DotnetSvelte Full-Stack Template</span>
+				<span>TradeMASter</span>
 				<span class="sep">•</span>
 				<span class="tech-stack">ASP.NET Core Minimal APIs + SvelteKit</span>
 			</div>
