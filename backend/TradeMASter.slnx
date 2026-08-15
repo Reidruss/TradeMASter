@@ -1,3 +1,6 @@
 <Solution>
+  <Project Path="TradeMASter.Agents/TradeMASter.Agents.csproj" />
   <Project Path="TradeMASter.Api/TradeMASter.Api.csproj" />
+  <Project Path="TradeMASter.Core/TradeMASter.Core.csproj" />
+  <Project Path="TradeMASter.Infrastructure/TradeMASter.Infrastructure.csproj" />
 </Solution>

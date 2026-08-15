@@ -13,4 +13,10 @@
     <PackageReference Include="Scalar.AspNetCore" Version="2.16.20" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\TradeMASter.Core\TradeMASter.Core.csproj" />
+    <ProjectReference Include="..\TradeMASter.Agents\TradeMASter.Agents.csproj" />
+    <ProjectReference Include="..\TradeMASter.Infrastructure\TradeMASter.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>
