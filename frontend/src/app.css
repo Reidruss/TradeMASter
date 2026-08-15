@@ -1,0 +1,298 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+	--font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--font-mono: 'JetBrains Mono', monospace;
+
+	--bg-canvas: #0b0f17;
+	--bg-surface: #121826;
+	--bg-surface-elevated: #1a2235;
+	--bg-surface-hover: #222d42;
+
+	--border-subtle: #243049;
+	--border-strong: #334366;
+
+	--text-primary: #f1f5f9;
+	--text-secondary: #94a3b8;
+	--text-muted: #64748b;
+
+	--primary: #38bdf8;
+	--primary-hover: #0ea5e9;
+	--primary-subtle: rgba(56, 189, 248, 0.12);
+	--primary-text: #0284c7;
+
+	--accent-dotnet: #a78bfa;
+	--accent-svelte: #ff3e00;
+
+	--success: #34d399;
+	--success-subtle: rgba(52, 211, 153, 0.15);
+	--warning: #fbbf24;
+	--warning-subtle: rgba(251, 191, 36, 0.15);
+	--danger: #f87171;
+	--danger-subtle: rgba(248, 113, 113, 0.15);
+
+	--radius-sm: 6px;
+	--radius-md: 10px;
+	--radius-lg: 14px;
+	--radius-full: 9999px;
+
+	--shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+	--shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.4);
+	--shadow-lg: 0 10px 24px -4px rgba(0, 0, 0, 0.5);
+
+	--transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+*, *::before, *::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+body {
+	font-family: var(--font-sans);
+	background-color: var(--bg-canvas);
+	color: var(--text-primary);
+	line-height: 1.5;
+	min-height: 100vh;
+	-webkit-font-smoothing: antialiased;
+}
+
+a {
+	color: var(--primary);
+	text-decoration: none;
+	transition: var(--transition);
+}
+
+a:hover {
+	color: var(--primary-hover);
+}
+
+button, input, textarea, select {
+	font-family: inherit;
+	font-size: inherit;
+}
+
+.container {
+	width: 100%;
+	max-width: 1180px;
+	margin: 0 auto;
+	padding: 0 1.5rem;
+}
+
+/* Typography Utilities */
+h1, h2, h3, h4, h5, h6 {
+	color: var(--text-primary);
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	line-height: 1.25;
+}
+
+h1 { font-size: 2.25rem; }
+h2 { font-size: 1.65rem; }
+h3 { font-size: 1.25rem; }
+
+p {
+	color: var(--text-secondary);
+}
+
+code, pre {
+	font-family: var(--font-mono);
+}
+
+/* Card Component */
+.card {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-lg);
+	padding: 1.5rem;
+	box-shadow: var(--shadow-sm);
+	transition: var(--transition);
+}
+
+.card-hover:hover {
+	border-color: var(--border-strong);
+	box-shadow: var(--shadow-md);
+}
+
+/* Button Components */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	padding: 0.6rem 1.1rem;
+	border-radius: var(--radius-md);
+	font-weight: 600;
+	font-size: 0.9rem;
+	cursor: pointer;
+	border: 1px solid transparent;
+	transition: var(--transition);
+	user-select: none;
+	text-decoration: none;
+}
+
+.btn:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.btn-primary {
+	background: var(--primary);
+	color: #04131f;
+}
+
+.btn-primary:hover:not(:disabled) {
+	background: var(--primary-hover);
+	color: #020b12;
+}
+
+.btn-secondary {
+	background: var(--bg-surface-elevated);
+	border-color: var(--border-subtle);
+	color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+	background: var(--bg-surface-hover);
+	border-color: var(--border-strong);
+}
+
+.btn-danger {
+	background: var(--danger-subtle);
+	border-color: rgba(248, 113, 113, 0.3);
+	color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+	background: var(--danger);
+	color: #ffffff;
+}
+
+.btn-sm {
+	padding: 0.35rem 0.75rem;
+	font-size: 0.8rem;
+	border-radius: var(--radius-sm);
+}
+
+/* Form Controls */
+.input, .select, .textarea {
+	width: 100%;
+	padding: 0.65rem 0.9rem;
+	background: var(--bg-canvas);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-md);
+	color: var(--text-primary);
+	font-size: 0.9rem;
+	outline: none;
+	transition: var(--transition);
+}
+
+.input:focus, .select:focus, .textarea:focus {
+	border-color: var(--primary);
+	box-shadow: 0 0 0 2px var(--primary-subtle);
+}
+
+.input::placeholder, .textarea::placeholder {
+	color: var(--text-muted);
+}
+
+/* Badges */
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.25rem 0.65rem;
+	border-radius: var(--radius-full);
+	font-size: 0.75rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.badge-success {
+	background: var(--success-subtle);
+	color: var(--success);
+	border: 1px solid rgba(52, 211, 153, 0.25);
+}
+
+.badge-warning {
+	background: var(--warning-subtle);
+	color: var(--warning);
+	border: 1px solid rgba(251, 191, 36, 0.25);
+}
+
+.badge-danger {
+	background: var(--danger-subtle);
+	color: var(--danger);
+	border: 1px solid rgba(248, 113, 113, 0.25);
+}
+
+.badge-primary {
+	background: var(--primary-subtle);
+	color: var(--primary);
+	border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+/* Status Indicator Dot */
+.dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	display: inline-block;
+}
+
+.dot-online {
+	background-color: var(--success);
+	box-shadow: 0 0 8px var(--success);
+}
+
+.dot-offline {
+	background-color: var(--danger);
+	box-shadow: 0 0 8px var(--danger);
+}
+
+.dot-loading {
+	background-color: var(--warning);
+	box-shadow: 0 0 8px var(--warning);
+}
+
+/* Code Snippet Block */
+.code-block {
+	background: #080b11;
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-md);
+	padding: 1rem;
+	overflow-x: auto;
+	font-size: 0.85rem;
+	color: #e2e8f0;
+	line-height: 1.6;
+}
+
+/* Grid Layouts */
+.grid-2 {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+	gap: 1.5rem;
+}
+
+.grid-3 {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 1.25rem;
+}
+
+/* Spinner Animation */
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+
+.spinner {
+	display: inline-block;
+	width: 1rem;
+	height: 1rem;
+	border: 2px solid rgba(255, 255, 255, 0.2);
+	border-top-color: currentColor;
+	border-radius: 50%;
+	animation: spin 0.6s linear infinite;
+}
