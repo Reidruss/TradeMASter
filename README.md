@@ -18,6 +18,7 @@ Designed specifically for **effortless, frictionless communication** between fro
   - Weather forecast query stream (`/api/weather/forecast`)
   - Full RESTful Todo management with optimistic updates (`/api/todos`)
   - Interactive API console to test custom endpoints live.
+- 🏛️ **Full Multi-Agent Architecture:** Detailed system design specification available in [ARCHITECTURE.md](ARCHITECTURE.md).
 - 🛠️ **Single-Command Startup:** Launch both frontend and backend concurrently with hot reloading using `npm run dev`.
 
 ---

@@ -1,11 +1,15 @@
+using Scalar.AspNetCore;
 using TradeMASter.Api.Endpoints;
 using TradeMASter.Api.Services;
-using Scalar.AspNetCore;
+using TradeMASter.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Configure Dependency Injection
 builder.Services.AddSingleton<ITodoService, InMemoryTodoService>();
+
+// Configure Infrastructure (Database, EF Core, Cache, Market Data, Paper Broker)
+builder.Services.AddInfrastructure(builder.Configuration);
 
 // Configure OpenAPI
 builder.Services.AddOpenApi();
@@ -24,6 +28,9 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Initialize and seed database
+await app.Services.InitializeDatabaseAsync();
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
@@ -49,6 +56,9 @@ else
 app.MapHealthEndpoints();
 app.MapWeatherEndpoints();
 app.MapTodoEndpoints();
+app.MapMarketEndpoints();
+app.MapPortfolioEndpoints();
+app.MapOrderEndpoints();
 
 // Root landing endpoint if accessed directly via browser
 app.MapGet("/", () => Results.Json(new
@@ -56,7 +66,15 @@ app.MapGet("/", () => Results.Json(new
     name = "TradeMASter API",
     status = "Online",
     docs = "/scalar/v1",
-    endpoints = new[] { "/api/health", "/api/weather/forecast", "/api/todos" }
+    endpoints = new[]
+    {
+        "/api/health",
+        "/api/market/watchlist",
+        "/api/market/quote/NVDA",
+        "/api/market/candles/NVDA",
+        "/api/portfolio",
+        "/api/orders"
+    }
 }));
 
 // Fallback to index.html for SPA routing in production if wwwroot exists

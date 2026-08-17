@@ -1,103 +1,121 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { onMount } from 'svelte';
+	import { healthService } from '$lib/api';
+	import type { HealthInfo } from '$lib/api';
 
-	let currentPath = $derived($page.url.pathname);
+	let health = $state<HealthInfo | null>(null);
+	let isLoading = $state(true);
+
+	onMount(() => {
+		let isMounted = true;
+
+		async function checkHealth() {
+			try {
+				const res = await healthService.getHealth();
+				if (isMounted) health = res;
+			} catch {
+				// keep state
+			} finally {
+				if (isMounted) isLoading = false;
+			}
+		}
+
+		checkHealth();
+		const interval = setInterval(checkHealth, 15000);
+
+		return () => {
+			isMounted = false;
+			clearInterval(interval);
+		};
+	});
 </script>
 
-<header class="nav-header">
+<header class="navbar">
 	<div class="container nav-content">
-		<a href="/" class="brand">
-			<div class="brand-icons">
-				<span class="badge-dot-net">.NET</span>
-				<span class="plus">+</span>
-				<span class="badge-svelte">Svelte</span>
-			</div>
-			<div class="brand-text">
-				<span class="brand-title">TradeMASter</span>
-				<span class="brand-sub">Full-Stack Application</span>
-			</div>
-		</a>
+		<div class="nav-left">
+			<a href="/" class="brand">
+				<div class="logo-icon">⚡</div>
+				<div class="brand-text">
+					<span class="brand-name">TradeMASter</span>
+					<span class="brand-tag">Phase 1 Foundation</span>
+				</div>
+			</a>
 
-		<nav class="nav-links">
-			<a href="/" class="nav-link" class:active={currentPath === '/'}>
-				Overview
-			</a>
-			<a href="/todos" class="nav-link" class:active={currentPath === '/todos'}>
-				Todo CRUD
-			</a>
-			<a href="/weather" class="nav-link" class:active={currentPath === '/weather'}>
-				Weather API
-			</a>
-			<a href="/docs" class="nav-link" class:active={currentPath === '/docs'}>
-				Scalar Docs
-			</a>
-		</nav>
+			<nav class="nav-links">
+				<a href="/" class="nav-link">Dashboard</a>
+				<a href="/market" class="nav-link">Market & Charts</a>
+				<a href="/portfolio" class="nav-link">Portfolio & Blotter</a>
+				<a href="/agents" class="nav-link">Agent Committee</a>
+				<a href="/docs" class="nav-link">API & Docs</a>
+			</nav>
+		</div>
 
-		<div class="nav-actions">
-			<a
-				href="/scalar/v1"
-				target="_blank"
-				rel="noreferrer"
-				class="btn btn-secondary btn-sm"
-			>
-				<span>OpenAPI Spec</span>
-				<span class="external-icon">↗</span>
+		<div class="nav-right">
+			<div class="health-indicator">
+				<span class="dot {isLoading ? 'dot-loading' : health?.status === 'Healthy' ? 'dot-online' : 'dot-offline'}"></span>
+				<span class="health-text">
+					{#if isLoading}
+						Connecting...
+					{:else if health?.status === 'Healthy'}
+						System Live
+					{:else}
+						Degraded
+					{/if}
+				</span>
+			</div>
+
+			<a href="/scalar/v1" target="_blank" rel="noreferrer" class="btn btn-secondary btn-sm scalar-btn">
+				<span>Scalar Docs</span>
+				<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+					<polyline points="15 3 21 3 21 9"></polyline>
+					<line x1="10" y1="14" x2="21" y2="3"></line>
+				</svg>
 			</a>
 		</div>
 	</div>
 </header>
 
 <style>
-	.nav-header {
-		background: rgba(18, 24, 38, 0.85);
-		backdrop-filter: blur(12px);
+	.navbar {
+		background: var(--bg-surface);
 		border-bottom: 1px solid var(--border-subtle);
 		position: sticky;
 		top: 0;
-		z-index: 50;
+		z-index: 100;
+		backdrop-filter: blur(12px);
 	}
 
 	.nav-content {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		height: 4.25rem;
+		height: 64px;
+	}
+
+	.nav-left {
+		display: flex;
+		align-items: center;
+		gap: 2.5rem;
 	}
 
 	.brand {
 		display: flex;
 		align-items: center;
-		gap: 0.85rem;
+		gap: 0.75rem;
 		text-decoration: none;
-		color: var(--text-primary);
 	}
 
-	.brand-icons {
+	.logo-icon {
+		width: 34px;
+		height: 34px;
+		background: linear-gradient(135deg, var(--primary) 0%, #0284c7 100%);
+		border-radius: var(--radius-md);
 		display: flex;
 		align-items: center;
-		gap: 0.3rem;
-		font-family: var(--font-mono);
-		font-size: 0.8rem;
-		font-weight: 700;
-	}
-
-	.badge-dot-net {
-		background: #512bd4;
-		color: #ffffff;
-		padding: 0.2rem 0.5rem;
-		border-radius: var(--radius-sm);
-	}
-
-	.badge-svelte {
-		background: #ff3e00;
-		color: #ffffff;
-		padding: 0.2rem 0.5rem;
-		border-radius: var(--radius-sm);
-	}
-
-	.plus {
-		color: var(--text-muted);
-		font-weight: 400;
+		justify-content: center;
+		font-size: 1.1rem;
+		box-shadow: 0 0 14px var(--primary-subtle);
 	}
 
 	.brand-text {
@@ -105,28 +123,32 @@
 		flex-direction: column;
 	}
 
-	.brand-title {
+	.brand-name {
+		font-size: 1.1rem;
 		font-weight: 700;
-		font-size: 1.05rem;
-		letter-spacing: -0.01em;
+		color: var(--text-primary);
+		line-height: 1.1;
 	}
 
-	.brand-sub {
-		font-size: 0.72rem;
-		color: var(--text-muted);
+	.brand-tag {
+		font-size: 0.68rem;
+		font-family: var(--font-mono);
+		color: var(--primary);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
 	}
 
 	.nav-links {
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: 0.5rem;
 	}
 
 	.nav-link {
 		color: var(--text-secondary);
-		padding: 0.45rem 0.85rem;
-		border-radius: var(--radius-md);
-		font-size: 0.9rem;
+		padding: 0.45rem 0.8rem;
+		border-radius: var(--radius-sm);
+		font-size: 0.88rem;
 		font-weight: 500;
 		transition: var(--transition);
 	}
@@ -136,35 +158,34 @@
 		background: var(--bg-surface-elevated);
 	}
 
-	.nav-link.active {
-		color: var(--primary);
-		background: var(--primary-subtle);
-		font-weight: 600;
-	}
-
-	.nav-actions {
+	.nav-right {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
+		gap: 1.25rem;
 	}
 
-	.external-icon {
-		font-size: 0.75rem;
-		opacity: 0.7;
+	.health-indicator {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		background: var(--bg-canvas);
+		padding: 0.35rem 0.75rem;
+		border-radius: var(--radius-full);
+		border: 1px solid var(--border-subtle);
+		font-size: 0.8rem;
+		font-weight: 500;
+		color: var(--text-secondary);
 	}
 
-	@media (max-width: 768px) {
-		.nav-content {
-			flex-direction: column;
-			height: auto;
-			padding: 0.75rem 1rem;
-			gap: 0.75rem;
-		}
+	.scalar-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
 
+	@media (max-width: 840px) {
 		.nav-links {
-			width: 100%;
-			justify-content: center;
-			flex-wrap: wrap;
+			display: none;
 		}
 	}
 </style>

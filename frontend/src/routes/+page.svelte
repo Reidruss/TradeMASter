@@ -1,99 +1,134 @@
 <script lang="ts">
-	import StatusBanner from '$lib/components/StatusBanner.svelte';
-	import ArchitectureCard from '$lib/components/ArchitectureCard.svelte';
-	import WeatherWidget from '$lib/components/WeatherWidget.svelte';
-	import TodoManager from '$lib/components/TodoManager.svelte';
-	import ApiTester from '$lib/components/ApiTester.svelte';
+	import { onMount } from 'svelte';
+	import MarketTickerBar from '$lib/components/MarketTickerBar.svelte';
+	import CandleChart from '$lib/components/CandleChart.svelte';
+	import TradeWidget from '$lib/components/TradeWidget.svelte';
+	import PortfolioSummaryCard from '$lib/components/PortfolioSummaryCard.svelte';
+	import PositionGrid from '$lib/components/PositionGrid.svelte';
+	import OrderBlotter from '$lib/components/OrderBlotter.svelte';
+	import { portfolioService, orderService, type Portfolio, type Order } from '$lib/api';
+
+	let activeSymbol = $state('NVDA');
+	let portfolio = $state<Portfolio | null>(null);
+	let orders = $state<Order[]>([]);
+	let isLoading = $state(true);
+
+	async function refreshData() {
+		try {
+			const [p, o] = await Promise.all([
+				portfolioService.getPortfolio(),
+				orderService.getOrders()
+			]);
+			portfolio = p;
+			orders = o;
+		} catch (err) {
+			console.error('Failed to load portfolio/orders', err);
+		} finally {
+			isLoading = false;
+		}
+	}
+
+	onMount(() => {
+		refreshData();
+		const interval = setInterval(refreshData, 10000);
+		return () => clearInterval(interval);
+	});
+
+	function handleSelectSymbol(sym: string) {
+		activeSymbol = sym;
+	}
 </script>
 
 <svelte:head>
-	<title>TradeMASter — ASP.NET Core & SvelteKit</title>
-	<meta
-		name="description"
-		content="Full-stack application combining ASP.NET Core Minimal APIs with SvelteKit and Svelte 5."
-	/>
+	<title>TradeMASter • Autonomous Multi-Agent Trading System</title>
 </svelte:head>
 
-<section class="hero-section">
-	<div class="hero-badge">
-		<span class="badge badge-primary">Ready-to-Use Template</span>
-		<span>Full-Stack Monorepo</span>
+<div class="dashboard-page">
+	<!-- Top Watchlist Ticker Bar -->
+	<MarketTickerBar onSelectSymbol={handleSelectSymbol} />
+
+	<div class="dashboard-body">
+		<!-- Hero / Header -->
+		<div class="dashboard-header">
+			<div>
+				<h1>Autonomous Trading Command Center</h1>
+				<p>Multi-agent deliberation, real-time market ingestion, risk governance & paper execution engine.</p>
+			</div>
+			<div class="header-actions">
+				<button type="button" class="btn btn-secondary" onclick={refreshData}>
+					<span>↻ Refresh State</span>
+				</button>
+				<a href="/agents" class="btn btn-primary">
+					<span>Agent War Room →</span>
+				</a>
+			</div>
+		</div>
+
+		<!-- Portfolio Summary Metric Cards -->
+		<PortfolioSummaryCard {portfolio} />
+
+		<!-- Chart + Execution Grid -->
+		<div class="trading-grid">
+			<div class="chart-column">
+				<CandleChart symbol={activeSymbol} onSymbolChange={handleSelectSymbol} />
+			</div>
+			<div class="order-column">
+				<TradeWidget symbol={activeSymbol} onOrderPlaced={refreshData} />
+			</div>
+		</div>
+
+		<!-- Positions and Order Blotter -->
+		<div class="holdings-grid">
+			<PositionGrid positions={portfolio?.positions ?? []} onTradeSymbol={handleSelectSymbol} />
+			<OrderBlotter {orders} />
+		</div>
 	</div>
-
-	<h1 class="hero-title">
-		ASP.NET Core <span class="highlight-dotnet">.NET</span> + SvelteKit <span class="highlight-svelte">Svelte 5</span>
-	</h1>
-
-	<p class="hero-description">
-		A production-ready starter template designed for seamless, friction-free communication between an ASP.NET Core Minimal API backend and a reactive SvelteKit frontend using Vite proxying and strongly typed services.
-	</p>
-</section>
-
-<!-- Real-time Backend Health Connection Status -->
-<StatusBanner />
-
-<!-- Architecture & Flow Explanation -->
-<div class="section-spacing">
-	<ArchitectureCard />
-</div>
-
-<!-- Interactive Live Demos Grid -->
-<div class="grid-2 section-spacing">
-	<WeatherWidget />
-	<TodoManager />
-</div>
-
-<!-- Interactive API Tester -->
-<div class="section-spacing">
-	<ApiTester />
 </div>
 
 <style>
-	.hero-section {
-		text-align: center;
-		max-width: 820px;
-		margin: 1.5rem auto 2.5rem auto;
+	.dashboard-page {
 		display: flex;
 		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	.dashboard-body {
+		display: flex;
+		flex-direction: column;
+		gap: 1.75rem;
+	}
+
+	.dashboard-header {
+		display: flex;
 		align-items: center;
+		justify-content: space-between;
+		flex-wrap: wrap;
 		gap: 1rem;
 	}
 
-	.hero-badge {
+	.header-actions {
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
-		font-size: 0.85rem;
-		color: var(--text-secondary);
 	}
 
-	.hero-title {
-		font-size: 2.75rem;
-		line-height: 1.15;
-		font-weight: 800;
+	.trading-grid {
+		display: grid;
+		grid-template-columns: 2fr 1fr;
+		gap: 1.5rem;
+		align-items: start;
 	}
 
-	.highlight-dotnet {
-		color: var(--accent-dotnet);
+	.holdings-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+		align-items: start;
 	}
 
-	.highlight-svelte {
-		color: var(--accent-svelte);
-	}
-
-	.hero-description {
-		font-size: 1.05rem;
-		line-height: 1.6;
-		color: var(--text-secondary);
-	}
-
-	.section-spacing {
-		margin-bottom: 2rem;
-	}
-
-	@media (max-width: 768px) {
-		.hero-title {
-			font-size: 2rem;
+	@media (max-width: 1024px) {
+		.trading-grid, .holdings-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>
