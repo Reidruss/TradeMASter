@@ -83,5 +83,6 @@ public interface ILivePortfolioPolicyService
     Task<Result<LivePortfolioPolicySnapshot>> UpdateAsync(UpdateLivePortfolioPolicyRequest request, CancellationToken cancellationToken = default);
     Task<Result<LivePortfolioPolicySnapshot>> ActivateEmergencyHaltAsync(string reason, CancellationToken cancellationToken = default);
     Task<Result<LivePortfolioPolicySnapshot>> ClearEmergencyHaltAsync(string confirmation, CancellationToken cancellationToken = default);
+    Task<Result> ValidatePreflightOrderAsync(OrderRequest request, LiveOrderPolicyContext context, CancellationToken cancellationToken = default);
     Task<Result> ValidateLiveOrderAsync(OrderRequest request, LiveOrderPolicyContext context, CancellationToken cancellationToken = default);
 }

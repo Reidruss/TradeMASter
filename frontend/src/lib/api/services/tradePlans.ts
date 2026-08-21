@@ -1,5 +1,5 @@
 import { api } from '../client';
-import type { TradePlanView } from '../types';
+import type { LiveExecutionBatchView, TradePlanView } from '../types';
 
 export const tradePlanService = {
 	getLatest: () => api.get<TradePlanView | null>('/api/trade-plans/latest'),
@@ -14,5 +14,14 @@ export const tradePlanService = {
 		}),
 
 	reject: (id: string, planHash: string, reason: string) =>
-		api.post<TradePlanView>(`/api/trade-plans/${id}/reject`, { planHash, reason })
+		api.post<TradePlanView>(`/api/trade-plans/${id}/reject`, { planHash, reason }),
+
+	getExecution: (id: string) =>
+		api.get<LiveExecutionBatchView | null>(`/api/trade-plans/${id}/execution`),
+
+	execute: (id: string, planHash: string, confirmation: string) =>
+		api.post<LiveExecutionBatchView>(`/api/trade-plans/${id}/execute`, {
+			planHash,
+			confirmation
+		})
 };

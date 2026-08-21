@@ -15,6 +15,9 @@ public class TradeMASterDbContext : DbContext, IUnitOfWork
     public DbSet<RobinhoodSession> RobinhoodSessions => Set<RobinhoodSession>();
     public DbSet<LivePortfolioPolicy> LivePortfolioPolicies => Set<LivePortfolioPolicy>();
     public DbSet<TradePlan> TradePlans => Set<TradePlan>();
+    public DbSet<LiveExecutionBatch> LiveExecutionBatches => Set<LiveExecutionBatch>();
+    public DbSet<LiveExecutionOrderAttempt> LiveExecutionOrderAttempts => Set<LiveExecutionOrderAttempt>();
+    public DbSet<LiveExecutionBrokerInbox> LiveExecutionBrokerInbox => Set<LiveExecutionBrokerInbox>();
 
     public TradeMASterDbContext(DbContextOptions<TradeMASterDbContext> options) : base(options)
     {

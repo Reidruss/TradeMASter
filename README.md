@@ -3,7 +3,7 @@
 > **Human-reviewed portfolio research and paper-rebalancing platform**
 > Built with **ASP.NET Core Minimal APIs (.NET 10)**, **SvelteKit + Svelte 5 Runes**, and **SignalR WebSockets**.
 
-Robinhood holdings are read through Robinhood's official Trading MCP and OAuth flow. TradeMASter does **not** collect your Robinhood password and does **not** send live Robinhood orders. Generated rebalance plans must pass local risk checks, and the Execute action is confined to the paper broker.
+Robinhood holdings are read through Robinhood's official Trading MCP and OAuth flow. TradeMASter does **not** collect your Robinhood password and, with its production authority locks disabled, does **not** send live Robinhood orders. Generated rebalances must pass deterministic risk checks; the optimization pipeline remains paper-only while a separate supervised broker preflight boundary records inspectable, submission-blocked batches.
 
 ---
 
@@ -77,7 +77,13 @@ Risk-approved live analyses now persist one immutable `TradePlan` per market run
 
 The dashboard review gate requires the exact phrase `APPROVE EXACT PLAN` for that hash. Full liquidations and plans at or above the configured material-notional threshold also require `CONFIRM MATERIAL TRADE PLAN`. Before recording approval, the backend refreshes the Agentic account and invalidates the plan when identity, equity, cash, holdings, prices, policy, or the emergency-halt state has materially changed. Repeated approval of the same already-approved hash is idempotent.
 
-Plan review is available through `GET /api/trade-plans/latest`, `GET /api/trade-plans/{id}`, `POST /api/trade-plans/{id}/approve`, and `POST /api/trade-plans/{id}/reject`. This milestone records review decisions only: approval does not submit, schedule, or route a Robinhood order, and live submission remains disabled.
+Plan review is available through `GET /api/trade-plans/latest`, `GET /api/trade-plans/{id}`, `POST /api/trade-plans/{id}/approve`, and `POST /api/trade-plans/{id}/reject`. Approval records a review decision only and never routes an order.
+
+### Broker preflight and idempotent submission boundary
+
+An approved plan can enter a second, explicit broker gate using the exact phrase `SUBMIT APPROVED PLAN`. The backend refreshes the Agentic account, holdings, open orders, buying power, quotes, and symbol eligibility; verifies the immutable hash, expiry, policy, market session, risk, price/position drift, and aggregate cash reserve; obtains Robinhood's order review; then stores deterministic sell-first attempts in a durable outbox. Broker requests and receipts are sanitized, use stable client order IDs, and are protected by uniqueness constraints plus a transactional receipt inbox.
+
+The dashboard shows this batch through `GET /api/trade-plans/{id}/execution`; `POST /api/trade-plans/{id}/execute` runs the gate. In normal builds it ends as `SubmissionBlocked`: the persisted live policy and `Robinhood:LiveTradingEnabled` are both false, with no API that can enable the persisted authority. Unknown broker outcomes are never automatically retried. Fill, cancellation, partial-fill, and restart reconciliation remain Milestone 3, so the project is still **not ready for real-money management**.
 
 ### Data provenance and remaining model risk
 
@@ -171,7 +177,7 @@ The checked-in defaults use:
 - Token exchange/refresh: `https://api.robinhood.com/oauth2/token/`
 - OAuth scope: `internal`
 
-These can be overridden with standard ASP.NET configuration keys such as `Robinhood__McpServerUrl`. `Robinhood:LiveTradingEnabled` remains `false`; changing that setting alone does not enable live execution because the optimizer is wired to `PaperBrokerService`.
+These can be overridden with standard ASP.NET configuration keys such as `Robinhood__McpServerUrl`. `Robinhood:LiveTradingEnabled` remains `false`; changing that setting alone does not enable live execution because the separate persisted live policy must also authorize it, and no current API can do so. The optimizer remains wired to `PaperBrokerService`.
 
 Robinhood states that agents can act without per-trade confirmation when an Agentic account grants trading access. This project intentionally stops short of that capability: inspect the holdings and rationale, then treat every recommendation as decision support rather than personalized financial advice.
 

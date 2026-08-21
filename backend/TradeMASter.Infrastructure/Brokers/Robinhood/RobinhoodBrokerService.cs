@@ -262,6 +262,35 @@ public sealed class RobinhoodBrokerService : IRobinhoodService
         }
     }
 
+    public async Task<Result<RobinhoodExecutionAccountSnapshot>> GetExecutionAccountSnapshotAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var session = await GetLatestSessionAsync(cancellationToken);
+        if (session is null)
+            return Result.Failure<RobinhoodExecutionAccountSnapshot>("Robinhood MCP is not connected.");
+        try
+        {
+            var snapshot = session.IsDemoMode
+                ? await CreateDemoSnapshotAsync(cancellationToken)
+                : await FetchSnapshotAsync(await GetUsableAccessTokenAsync(session, cancellationToken), cancellationToken);
+            if (!session.IsDemoMode) await UpdateSessionMetadataAsync(session, snapshot, cancellationToken);
+            return Result.Success(new RobinhoodExecutionAccountSnapshot(
+                snapshot.AccountNumber,
+                snapshot.AccountType,
+                snapshot.TotalEquity,
+                snapshot.CashAvailable,
+                snapshot.BuyingPower,
+                DateTime.UtcNow,
+                session.IsDemoMode,
+                snapshot.Holdings));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Robinhood MCP execution snapshot failed.");
+            return Result.Failure<RobinhoodExecutionAccountSnapshot>($"Robinhood MCP execution snapshot failed: {ex.Message}");
+        }
+    }
+
     public async Task<Result<IReadOnlyList<RobinhoodHoldingItem>>> SetCustomHoldingsAsync(
         IReadOnlyList<RobinhoodHoldingItem> customHoldings,
         CancellationToken cancellationToken = default)

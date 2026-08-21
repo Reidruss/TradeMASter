@@ -155,3 +155,60 @@ public class TradePlanConfiguration : IEntityTypeConfiguration<TradePlan>
         builder.Property(item => item.DecisionReason).HasMaxLength(500);
     }
 }
+
+public class LiveExecutionBatchConfiguration : IEntityTypeConfiguration<LiveExecutionBatch>
+{
+    public void Configure(EntityTypeBuilder<LiveExecutionBatch> builder)
+    {
+        builder.HasKey(item => item.Id);
+        builder.HasIndex(item => item.TradePlanId).IsUnique();
+        builder.HasIndex(item => new { item.Status, item.CreatedAt });
+        builder.Property(item => item.PlanHash).IsRequired().HasMaxLength(64);
+        builder.Property(item => item.AccountLastFour).IsRequired().HasMaxLength(16);
+        builder.Property(item => item.PreflightSnapshotJson).IsRequired();
+        builder.Property(item => item.ReservedBuyingPower).HasPrecision(18, 4);
+        builder.Property(item => item.TotalBuyNotional).HasPrecision(18, 4);
+        builder.Property(item => item.TotalSellNotional).HasPrecision(18, 4);
+        builder.Property(item => item.StatusReason).HasMaxLength(1000);
+        builder.HasMany(item => item.Attempts).WithOne().HasForeignKey(item => item.BatchId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class LiveExecutionOrderAttemptConfiguration : IEntityTypeConfiguration<LiveExecutionOrderAttempt>
+{
+    public void Configure(EntityTypeBuilder<LiveExecutionOrderAttempt> builder)
+    {
+        builder.HasKey(item => item.Id);
+        builder.HasIndex(item => item.ClientOrderId).IsUnique();
+        builder.HasIndex(item => item.IdempotencyKey).IsUnique();
+        builder.HasIndex(item => new { item.BatchId, item.Sequence }).IsUnique();
+        builder.HasIndex(item => item.BrokerOrderId);
+        builder.Property(item => item.IdempotencyKey).IsRequired().HasMaxLength(64);
+        builder.Property(item => item.Symbol).IsRequired().HasMaxLength(20);
+        builder.Property(item => item.Quantity).HasPrecision(18, 6);
+        builder.Property(item => item.LimitPrice).HasPrecision(18, 4);
+        builder.Property(item => item.EstimatedNotional).HasPrecision(18, 4);
+        builder.Property(item => item.SanitizedRequestJson).IsRequired();
+        builder.Property(item => item.SanitizedReviewJson);
+        builder.Property(item => item.SanitizedResponseJson);
+        builder.Property(item => item.BrokerOrderId).HasMaxLength(200);
+        builder.Property(item => item.FailureReason).HasMaxLength(1000);
+    }
+}
+
+public class LiveExecutionBrokerInboxConfiguration : IEntityTypeConfiguration<LiveExecutionBrokerInbox>
+{
+    public void Configure(EntityTypeBuilder<LiveExecutionBrokerInbox> builder)
+    {
+        builder.HasKey(item => item.Id);
+        builder.HasIndex(item => item.AttemptId).IsUnique();
+        builder.HasIndex(item => item.ClientOrderId).IsUnique();
+        builder.HasIndex(item => item.BrokerOrderId).IsUnique();
+        builder.HasIndex(item => new { item.BatchId, item.ReceivedAtUtc });
+        builder.Property(item => item.BrokerOrderId).IsRequired().HasMaxLength(200);
+        builder.Property(item => item.BrokerState).IsRequired().HasMaxLength(100);
+        builder.Property(item => item.SanitizedPayloadJson).IsRequired();
+        builder.HasOne<LiveExecutionBatch>().WithMany().HasForeignKey(item => item.BatchId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne<LiveExecutionOrderAttempt>().WithOne().HasForeignKey<LiveExecutionBrokerInbox>(item => item.AttemptId).OnDelete(DeleteBehavior.Cascade);
+    }
+}

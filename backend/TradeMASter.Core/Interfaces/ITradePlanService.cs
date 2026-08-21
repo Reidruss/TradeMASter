@@ -35,7 +35,8 @@ public record TradePlanRiskSnapshot(
     decimal EstimatedTurnoverPercent,
     decimal ProjectedAnnualizedVolatilityPercent,
     decimal ParametricDailyVaR95Percent,
-    decimal TargetCashPercent);
+    decimal TargetCashPercent,
+    decimal HistoricalMaxDrawdownPercent = 0m);
 
 public record ImmutableTradePlanPayload(
     Guid SourceRunId,

@@ -1,0 +1,133 @@
+using TradeMASter.Core.Common;
+using TradeMASter.Core.Enums;
+
+namespace TradeMASter.Core.Interfaces;
+
+public record BrokerQuoteSnapshot(
+    string Symbol,
+    decimal Price,
+    decimal? Bid,
+    decimal? Ask,
+    DateTime AsOfUtc,
+    string Source);
+
+public record BrokerInstrumentEligibility(
+    string Symbol,
+    bool IsTradable,
+    bool SupportsFractionalShares,
+    AssetType AssetType,
+    string Exchange,
+    string Source);
+
+public record BrokerOpenOrderSnapshot(
+    string BrokerOrderId,
+    string Symbol,
+    OrderSide Side,
+    decimal Quantity,
+    decimal? LimitPrice,
+    string State);
+
+public record BrokerExecutionSnapshot(
+    string AccountNumber,
+    string AccountType,
+    decimal TotalEquity,
+    decimal CashAvailable,
+    decimal BuyingPower,
+    DateTime AsOfUtc,
+    IReadOnlyList<RobinhoodHoldingItem> Holdings,
+    IReadOnlyList<BrokerOpenOrderSnapshot> OpenOrders,
+    IReadOnlyList<BrokerQuoteSnapshot> Quotes,
+    IReadOnlyList<BrokerInstrumentEligibility> Eligibility,
+    decimal CurrentDailyTurnoverPercent);
+
+public record BrokerOrderCommand(
+    string AccountNumber,
+    Guid ClientOrderId,
+    string IdempotencyKey,
+    string Symbol,
+    OrderSide Side,
+    OrderType Type,
+    decimal Quantity,
+    decimal LimitPrice,
+    string TimeInForce = "gfd");
+
+public record BrokerOrderReview(
+    bool IsApproved,
+    IReadOnlyList<string> Warnings,
+    string SanitizedResponseJson);
+
+public record BrokerOrderSubmission(
+    BrokerSubmissionOutcome Outcome,
+    string? BrokerOrderId,
+    string BrokerState,
+    string Message,
+    string SanitizedResponseJson);
+
+public interface IRobinhoodLiveExecutionAdapter
+{
+    Task<Result<BrokerExecutionSnapshot>> GetFreshPreflightSnapshotAsync(
+        IReadOnlyList<string> symbols,
+        CancellationToken cancellationToken = default);
+    Task<Result<BrokerOrderReview>> ReviewOrderAsync(
+        BrokerOrderCommand command,
+        CancellationToken cancellationToken = default);
+    Task<BrokerOrderSubmission> PlaceOrderAsync(
+        BrokerOrderCommand command,
+        CancellationToken cancellationToken = default);
+}
+
+public interface ILiveExecutionAuthority
+{
+    Result Verify(LivePortfolioPolicySnapshot policy);
+}
+
+public interface IUsMarketCalendar
+{
+    bool IsRegularSession(DateTime utcNow);
+    string DescribeClosure(DateTime utcNow);
+}
+
+public record ExecuteApprovedTradePlanRequest(string? PlanHash, string? Confirmation);
+
+public record LiveExecutionAttemptView(
+    Guid Id,
+    int Sequence,
+    Guid ClientOrderId,
+    string IdempotencyKey,
+    string Symbol,
+    OrderSide Side,
+    OrderType Type,
+    decimal Quantity,
+    decimal LimitPrice,
+    decimal EstimatedNotional,
+    LiveExecutionAttemptStatus Status,
+    string? BrokerOrderId,
+    int AttemptCount,
+    DateTime? LastAttemptAtUtc,
+    string? FailureReason,
+    string SanitizedRequestJson,
+    string? SanitizedReviewJson,
+    string? SanitizedResponseJson);
+
+public record LiveExecutionBatchView(
+    Guid Id,
+    Guid TradePlanId,
+    string PlanHash,
+    LiveExecutionBatchStatus Status,
+    string AccountLastFour,
+    DateTime PreflightAtUtc,
+    decimal ReservedBuyingPower,
+    decimal TotalBuyNotional,
+    decimal TotalSellNotional,
+    string? StatusReason,
+    DateTime? SubmittedAtUtc,
+    IReadOnlyList<LiveExecutionAttemptView> Attempts);
+
+public interface ILiveExecutionService
+{
+    Task<Result<LiveExecutionBatchView?>> GetByTradePlanAsync(Guid tradePlanId, CancellationToken cancellationToken = default);
+    Task<Result<LiveExecutionBatchView>> ExecuteApprovedPlanAsync(
+        Guid tradePlanId,
+        ExecuteApprovedTradePlanRequest request,
+        CancellationToken cancellationToken = default);
+}

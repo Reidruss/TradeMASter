@@ -90,6 +90,24 @@ export enum TradePlanStatus {
 	Invalidated = 4
 }
 
+export enum LiveExecutionBatchStatus {
+	PreflightPassed = 0,
+	SubmissionBlocked = 1,
+	Submitting = 2,
+	Submitted = 3,
+	Failed = 4,
+	ReconciliationRequired = 5
+}
+
+export enum LiveExecutionAttemptStatus {
+	Pending = 0,
+	Submitting = 1,
+	BrokerAccepted = 2,
+	BrokerRejected = 3,
+	ReconciliationRequired = 4,
+	Skipped = 5
+}
+
 export interface PriceTick {
 	symbol: string;
 	price: number;
@@ -570,6 +588,42 @@ export interface TradePlanView {
 	invalidatedAtUtc?: string | null;
 	decisionReason?: string | null;
 	payload: ImmutableTradePlanPayload;
+}
+
+export interface LiveExecutionAttemptView {
+	id: string;
+	sequence: number;
+	clientOrderId: string;
+	idempotencyKey: string;
+	symbol: string;
+	side: OrderSide;
+	type: OrderType;
+	quantity: number;
+	limitPrice: number;
+	estimatedNotional: number;
+	status: LiveExecutionAttemptStatus;
+	brokerOrderId?: string | null;
+	attemptCount: number;
+	lastAttemptAtUtc?: string | null;
+	failureReason?: string | null;
+	sanitizedRequestJson: string;
+	sanitizedReviewJson?: string | null;
+	sanitizedResponseJson?: string | null;
+}
+
+export interface LiveExecutionBatchView {
+	id: string;
+	tradePlanId: string;
+	planHash: string;
+	status: LiveExecutionBatchStatus;
+	accountLastFour: string;
+	preflightAtUtc: string;
+	reservedBuyingPower: number;
+	totalBuyNotional: number;
+	totalSellNotional: number;
+	statusReason?: string | null;
+	submittedAtUtc?: string | null;
+	attempts: LiveExecutionAttemptView[];
 }
 
 export interface LivePortfolioPolicySnapshot {

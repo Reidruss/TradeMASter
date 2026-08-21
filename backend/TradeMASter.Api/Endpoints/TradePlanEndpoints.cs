@@ -64,6 +64,34 @@ public static class TradePlanEndpoints
         .WithName("RejectExactTradePlan")
         .WithSummary("Reject the exact hash-bound plan with a persisted reason; never submits orders");
 
+        group.MapGet("/{id:guid}/execution", async (
+            Guid id,
+            [FromServices] ILiveExecutionService service,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await service.GetByTradePlanAsync(id, cancellationToken);
+            if (result.IsFailure) return Results.BadRequest(new { error = result.Error });
+            return result.Value is null
+                ? Results.Content("null", "application/json")
+                : Results.Ok(result.Value);
+        })
+        .WithName("GetTradePlanLiveExecution")
+        .WithSummary("Get the durable preflight, outbox, idempotency, and broker-acceptance state for an approved plan");
+
+        group.MapPost("/{id:guid}/execute", async (
+            Guid id,
+            [FromBody] ExecuteApprovedTradePlanRequest request,
+            [FromServices] ILiveExecutionService service,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await service.ExecuteApprovedPlanAsync(id, request, cancellationToken);
+            return result.IsSuccess
+                ? Results.Ok(result.Value)
+                : Results.Conflict(new { error = result.Error });
+        })
+        .WithName("ExecuteApprovedTradePlan")
+        .WithSummary("Run fresh deterministic broker preflight and a durable idempotent outbox; submission remains blocked until both persisted and application authority are enabled");
+
         return group;
     }
 }

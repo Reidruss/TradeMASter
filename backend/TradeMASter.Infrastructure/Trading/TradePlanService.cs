@@ -112,7 +112,8 @@ public sealed class TradePlanService(
                 run.EstimatedTurnoverPercent,
                 run.ProjectedAnnualizedVolatilityPercent,
                 run.ParametricDailyVaR95Percent,
-                run.TargetCashPercent),
+                run.TargetCashPercent,
+                run.PerformanceMetrics.MaxDrawdownPercent),
             run.ReflectionSummary,
             run.DataSourceSummary,
             run.Candidates.ToDictionary(

@@ -34,6 +34,16 @@ public record RobinhoodHoldingItem(
     decimal UnrealizedPnLPercent,
     decimal PortfolioWeightPercent);
 
+public record RobinhoodExecutionAccountSnapshot(
+    string AccountNumber,
+    string AccountType,
+    decimal TotalEquity,
+    decimal CashAvailable,
+    decimal BuyingPower,
+    DateTime AsOfUtc,
+    bool IsDemoMode,
+    IReadOnlyList<RobinhoodHoldingItem> Holdings);
+
 public record SavedRobinhoodSessionDto(
     bool HasSavedSession,
     string? AccountNumber,
@@ -59,6 +69,7 @@ public interface IRobinhoodService
     Task<Result<RobinhoodAccountInfo>> GetAccountStatusAsync(CancellationToken cancellationToken = default);
     Task<Result<SavedRobinhoodSessionDto>> GetSavedSessionAsync(CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<RobinhoodHoldingItem>>> GetLiveHoldingsAsync(CancellationToken cancellationToken = default);
+    Task<Result<RobinhoodExecutionAccountSnapshot>> GetExecutionAccountSnapshotAsync(CancellationToken cancellationToken = default);
     Task<Result<Portfolio>> SyncHoldingsToPortfolioAsync(Guid? targetPortfolioId = null, CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<RobinhoodHoldingItem>>> SetCustomHoldingsAsync(IReadOnlyList<RobinhoodHoldingItem> customHoldings, CancellationToken cancellationToken = default);
 }

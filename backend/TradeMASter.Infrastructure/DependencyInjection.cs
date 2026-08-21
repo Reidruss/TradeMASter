@@ -86,6 +86,10 @@ public static class DependencyInjection
         services.AddScoped<IRobinhoodService, RobinhoodBrokerService>();
         services.AddScoped<ILivePortfolioPolicyService, LivePortfolioPolicyService>();
         services.AddScoped<ITradePlanService, TradePlanService>();
+        services.AddScoped<IRobinhoodLiveExecutionAdapter, RobinhoodLiveExecutionAdapter>();
+        services.AddScoped<ILiveExecutionAuthority, LiveExecutionAuthority>();
+        services.AddSingleton<IUsMarketCalendar, UsEquityMarketCalendar>();
+        services.AddScoped<ILiveExecutionService, LiveExecutionService>();
 
         return services;
     }
@@ -284,5 +288,134 @@ public static class DependencyInjection
               CREATE INDEX IF NOT EXISTS "IX_TradePlans_Status_CreatedAt" ON "TradePlans" ("Status", "CreatedAt");
               """;
         await db.Database.ExecuteSqlRawAsync(tradePlanSql);
+
+        var executionSql = db.Database.IsNpgsql()
+            ? """
+              CREATE TABLE IF NOT EXISTS "LiveExecutionBatches" (
+                  "Id" uuid NOT NULL PRIMARY KEY,
+                  "CreatedAt" timestamp with time zone NOT NULL,
+                  "UpdatedAt" timestamp with time zone NULL,
+                  "TradePlanId" uuid NOT NULL,
+                  "PlanHash" character varying(64) NOT NULL,
+                  "Status" integer NOT NULL,
+                  "AccountLastFour" character varying(16) NOT NULL,
+                  "PreflightAtUtc" timestamp with time zone NOT NULL,
+                  "PreflightSnapshotJson" text NOT NULL,
+                  "ReservedBuyingPower" numeric(18,4) NOT NULL,
+                  "TotalBuyNotional" numeric(18,4) NOT NULL,
+                  "TotalSellNotional" numeric(18,4) NOT NULL,
+                  "StatusReason" character varying(1000) NULL,
+                  "SubmittedAtUtc" timestamp with time zone NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBatches_TradePlanId" ON "LiveExecutionBatches" ("TradePlanId");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionBatches_Status_CreatedAt" ON "LiveExecutionBatches" ("Status", "CreatedAt");
+              CREATE TABLE IF NOT EXISTS "LiveExecutionOrderAttempts" (
+                  "Id" uuid NOT NULL PRIMARY KEY,
+                  "CreatedAt" timestamp with time zone NOT NULL,
+                  "UpdatedAt" timestamp with time zone NULL,
+                  "BatchId" uuid NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "Sequence" integer NOT NULL,
+                  "ClientOrderId" uuid NOT NULL,
+                  "IdempotencyKey" character varying(64) NOT NULL,
+                  "Symbol" character varying(20) NOT NULL,
+                  "Side" integer NOT NULL,
+                  "Type" integer NOT NULL,
+                  "Quantity" numeric(18,6) NOT NULL,
+                  "LimitPrice" numeric(18,4) NOT NULL,
+                  "EstimatedNotional" numeric(18,4) NOT NULL,
+                  "Status" integer NOT NULL,
+                  "SanitizedRequestJson" text NOT NULL,
+                  "SanitizedReviewJson" text NULL,
+                  "SanitizedResponseJson" text NULL,
+                  "BrokerOrderId" character varying(200) NULL,
+                  "AttemptCount" integer NOT NULL,
+                  "LastAttemptAtUtc" timestamp with time zone NULL,
+                  "FailureReason" character varying(1000) NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_ClientOrderId" ON "LiveExecutionOrderAttempts" ("ClientOrderId");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_IdempotencyKey" ON "LiveExecutionOrderAttempts" ("IdempotencyKey");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_BatchId_Sequence" ON "LiveExecutionOrderAttempts" ("BatchId", "Sequence");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_BrokerOrderId" ON "LiveExecutionOrderAttempts" ("BrokerOrderId");
+              CREATE TABLE IF NOT EXISTS "LiveExecutionBrokerInbox" (
+                  "Id" uuid NOT NULL PRIMARY KEY,
+                  "CreatedAt" timestamp with time zone NOT NULL,
+                  "UpdatedAt" timestamp with time zone NULL,
+                  "BatchId" uuid NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "AttemptId" uuid NOT NULL REFERENCES "LiveExecutionOrderAttempts" ("Id") ON DELETE CASCADE,
+                  "ClientOrderId" uuid NOT NULL,
+                  "BrokerOrderId" character varying(200) NOT NULL,
+                  "BrokerState" character varying(100) NOT NULL,
+                  "SanitizedPayloadJson" text NOT NULL,
+                  "ReceivedAtUtc" timestamp with time zone NOT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_AttemptId" ON "LiveExecutionBrokerInbox" ("AttemptId");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_ClientOrderId" ON "LiveExecutionBrokerInbox" ("ClientOrderId");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_BrokerOrderId" ON "LiveExecutionBrokerInbox" ("BrokerOrderId");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_BatchId_ReceivedAtUtc" ON "LiveExecutionBrokerInbox" ("BatchId", "ReceivedAtUtc");
+              """
+            : """
+              CREATE TABLE IF NOT EXISTS "LiveExecutionBatches" (
+                  "Id" TEXT NOT NULL PRIMARY KEY,
+                  "CreatedAt" TEXT NOT NULL,
+                  "UpdatedAt" TEXT NULL,
+                  "TradePlanId" TEXT NOT NULL,
+                  "PlanHash" TEXT NOT NULL,
+                  "Status" INTEGER NOT NULL,
+                  "AccountLastFour" TEXT NOT NULL,
+                  "PreflightAtUtc" TEXT NOT NULL,
+                  "PreflightSnapshotJson" TEXT NOT NULL,
+                  "ReservedBuyingPower" TEXT NOT NULL,
+                  "TotalBuyNotional" TEXT NOT NULL,
+                  "TotalSellNotional" TEXT NOT NULL,
+                  "StatusReason" TEXT NULL,
+                  "SubmittedAtUtc" TEXT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBatches_TradePlanId" ON "LiveExecutionBatches" ("TradePlanId");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionBatches_Status_CreatedAt" ON "LiveExecutionBatches" ("Status", "CreatedAt");
+              CREATE TABLE IF NOT EXISTS "LiveExecutionOrderAttempts" (
+                  "Id" TEXT NOT NULL PRIMARY KEY,
+                  "CreatedAt" TEXT NOT NULL,
+                  "UpdatedAt" TEXT NULL,
+                  "BatchId" TEXT NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "Sequence" INTEGER NOT NULL,
+                  "ClientOrderId" TEXT NOT NULL,
+                  "IdempotencyKey" TEXT NOT NULL,
+                  "Symbol" TEXT NOT NULL,
+                  "Side" INTEGER NOT NULL,
+                  "Type" INTEGER NOT NULL,
+                  "Quantity" TEXT NOT NULL,
+                  "LimitPrice" TEXT NOT NULL,
+                  "EstimatedNotional" TEXT NOT NULL,
+                  "Status" INTEGER NOT NULL,
+                  "SanitizedRequestJson" TEXT NOT NULL,
+                  "SanitizedReviewJson" TEXT NULL,
+                  "SanitizedResponseJson" TEXT NULL,
+                  "BrokerOrderId" TEXT NULL,
+                  "AttemptCount" INTEGER NOT NULL,
+                  "LastAttemptAtUtc" TEXT NULL,
+                  "FailureReason" TEXT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_ClientOrderId" ON "LiveExecutionOrderAttempts" ("ClientOrderId");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_IdempotencyKey" ON "LiveExecutionOrderAttempts" ("IdempotencyKey");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_BatchId_Sequence" ON "LiveExecutionOrderAttempts" ("BatchId", "Sequence");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionOrderAttempts_BrokerOrderId" ON "LiveExecutionOrderAttempts" ("BrokerOrderId");
+              CREATE TABLE IF NOT EXISTS "LiveExecutionBrokerInbox" (
+                  "Id" TEXT NOT NULL PRIMARY KEY,
+                  "CreatedAt" TEXT NOT NULL,
+                  "UpdatedAt" TEXT NULL,
+                  "BatchId" TEXT NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "AttemptId" TEXT NOT NULL REFERENCES "LiveExecutionOrderAttempts" ("Id") ON DELETE CASCADE,
+                  "ClientOrderId" TEXT NOT NULL,
+                  "BrokerOrderId" TEXT NOT NULL,
+                  "BrokerState" TEXT NOT NULL,
+                  "SanitizedPayloadJson" TEXT NOT NULL,
+                  "ReceivedAtUtc" TEXT NOT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_AttemptId" ON "LiveExecutionBrokerInbox" ("AttemptId");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_ClientOrderId" ON "LiveExecutionBrokerInbox" ("ClientOrderId");
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_BrokerOrderId" ON "LiveExecutionBrokerInbox" ("BrokerOrderId");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_BatchId_ReceivedAtUtc" ON "LiveExecutionBrokerInbox" ("BatchId", "ReceivedAtUtc");
+              """;
+        await db.Database.ExecuteSqlRawAsync(executionSql);
     }
 }

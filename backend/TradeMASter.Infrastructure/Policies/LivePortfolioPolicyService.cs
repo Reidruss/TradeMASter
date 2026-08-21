@@ -48,7 +48,7 @@ public sealed class LivePortfolioPolicyService(
         return Result.Success(policy.ToSnapshot());
     }
 
-    public async Task<Result> ValidateLiveOrderAsync(
+    public async Task<Result> ValidatePreflightOrderAsync(
         OrderRequest request,
         LiveOrderPolicyContext context,
         CancellationToken cancellationToken = default)
@@ -114,11 +114,21 @@ public sealed class LivePortfolioPolicyService(
                 return Result.Failure("Order would exceed the one-day 95% VaR limit.");
         }
 
-        if (policy.RegularMarketHoursOnly && !IsRegularUsMarketSession(now))
+        return Result.Success();
+    }
+
+    public async Task<Result> ValidateLiveOrderAsync(
+        OrderRequest request,
+        LiveOrderPolicyContext context,
+        CancellationToken cancellationToken = default)
+    {
+        var preflight = await ValidatePreflightOrderAsync(request, context, cancellationToken);
+        if (preflight.IsFailure) return preflight;
+        var policy = await GetEntityAsync(cancellationToken);
+        if (policy.RegularMarketHoursOnly && !IsRegularUsMarketSession(context.EvaluationTimeUtc ?? DateTime.UtcNow))
             return Result.Failure("Initial live policy permits submission only during regular U.S. market hours.");
         if (!policy.LiveTradingEnabled || !configuration.GetValue<bool>("Robinhood:LiveTradingEnabled"))
             return Result.Failure("Live order submission is disabled by both persisted policy and application configuration.");
-
         return Result.Success();
     }
 

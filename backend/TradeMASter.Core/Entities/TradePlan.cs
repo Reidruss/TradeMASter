@@ -7,6 +7,7 @@ public sealed class TradePlan : BaseEntity
 {
     public const string PrimaryApprovalConfirmation = "APPROVE EXACT PLAN";
     public const string SecondaryApprovalConfirmation = "CONFIRM MATERIAL TRADE PLAN";
+    public const string LiveSubmissionConfirmation = "SUBMIT APPROVED PLAN";
 
     public Guid SourceRunId { get; private set; }
     public Guid PortfolioId { get; private set; }

@@ -17,10 +17,11 @@ The objective is not to guarantee investment performance. The objective is to en
 | Generate paper rebalance orders | Implemented | Buffered limit-order proposals with small-trade suppression. |
 | Persisted live authority policy | Implemented | Phase-one scope, hard ceilings, live-disabled lock, and emergency halt are enforced in deterministic code. |
 | Immutable plans and exact human approval | Implemented | Hash-bound, expiring plans persist the Agentic snapshot, orders, targets, risk, provenance, policy version, and decision record. Approval never routes an order. |
-| Submit and manage live orders safely | Not ready | Broker preflight, submission idempotency, reconciliation, and recovery controls are required. |
+| Broker preflight and duplicate-safe submission boundary | Implemented, locked | Milestone 2 preflight, durable outbox/inbox, idempotency, drift checks, and fail-closed submission states are implemented. Both live-authority switches remain disabled. |
+| Reconcile and manage live order lifecycle | Not ready | Fill polling, partial-fill/cancel handling, restart reconciliation, final portfolio verification, and operator recovery are Milestone 3. |
 | Demonstrate strategy performance | Not ready | Walk-forward, shadow-mode, and guarded-pilot evidence is required. |
 
-**Current operating boundary:** real-account analysis, immutable trade-plan review, and approval recording only. Approval does not submit or schedule orders. Live execution must remain disabled until every required launch gate in this document passes.
+**Current operating boundary:** real-account analysis, immutable trade-plan review, approval recording, and fresh broker preflight/outbox inspection. Approval alone never submits or schedules orders. The execution endpoint requires a second exact phrase, but production authority remains disabled in both persisted policy and application configuration, so it records a `SubmissionBlocked` batch and cannot call Robinhood's place-order tool. Live execution must remain disabled until every required launch gate in this document passes.
 
 ## Safety principles
 
@@ -136,24 +137,36 @@ Submitted -> PartiallyFilled -> Filled
 
 ### Deliverables
 
-- [ ] Add a dedicated live Robinhood execution adapter; keep research agents isolated from it.
-- [ ] Refresh account identity, holdings, open orders, buying power, and quotes immediately before submission.
-- [ ] Recalculate quantities and risk from the fresh snapshot without changing the approved economic intent.
-- [ ] Reject plans when holdings, prices, buying power, market state, or policy have drifted beyond configured tolerances.
-- [ ] Verify symbol tradability and fractional-share eligibility.
-- [ ] Reserve buying power across the entire batch before submitting any buy.
-- [ ] Attach a stable local idempotency key to every broker order attempt.
-- [ ] Prevent duplicate submission through a database uniqueness constraint and transactional outbox/inbox pattern.
-- [ ] Enforce market-hours and holiday policy.
-- [ ] Submit sells before dependent buys when the plan requires released buying power.
-- [ ] Record sanitized broker requests and responses without tokens or secrets.
+- [x] Add a dedicated live Robinhood execution adapter; keep research agents isolated from it.
+- [x] Refresh account identity, holdings, open orders, buying power, and quotes immediately before submission.
+- [x] Revalidate exact approved quantities, notionals, cash, and risk from the fresh snapshot without changing economic intent.
+- [x] Reject plans when holdings, prices, buying power, market state, or policy have drifted beyond configured tolerances.
+- [x] Verify symbol tradability and require both policy and broker eligibility for fractional shares.
+- [x] Reserve buying power across the entire batch before submitting any buy.
+- [x] Attach a stable local idempotency key and deterministic client order ID to every broker order attempt.
+- [x] Prevent duplicate submission through database uniqueness constraints, an atomic outbox claim, and a transactional broker-receipt inbox.
+- [x] Enforce regular U.S. equity market hours, weekends, and exchange holidays.
+- [x] Sequence sells before buys. Cash-account sell proceeds are not counted as same-batch buying power before settlement.
+- [x] Record sanitized broker requests, reviews, and responses without OAuth tokens or full account identifiers.
 
 ### Acceptance criteria
 
-- Network timeouts, API retries, double-clicks, and application restarts cannot create duplicate orders.
-- A stale or materially changed plan fails closed and returns to human review.
-- Total submitted notional never exceeds available buying power or policy limits.
-- A broker error leaves the plan in a recoverable, inspectable state.
+- [x] Network timeouts, API retries, double-clicks, and application restarts cannot automatically create duplicate orders; ambiguous outcomes stop in `ReconciliationRequired`.
+- [x] A stale or materially changed plan fails closed and returns to human review.
+- [x] Total submitted notional never exceeds fresh available buying power or deterministic policy limits.
+- [x] A broker rejection, schema drift, timeout, or receipt conflict leaves the batch in an inspectable failed or reconciliation-required state.
+
+### Milestone-two implementation notes
+
+- Adapter: `RobinhoodLiveExecutionAdapter` is the only component that can access `review_equity_order` or `place_equity_order`; research agents receive no execution dependency.
+- Preflight: Robinhood account identity, holdings, buying power, order history/open orders, quote timestamps, tradability, exchange, fractional capability, and daily turnover are refreshed before the batch and immediately before each possible submission.
+- Intent: the approved plan hash, policy version, exact quantity, limit price, account suffix, holding set, and drift tolerances are rechecked. Material changes invalidate the plan instead of silently recalculating a different trade.
+- Durability: one batch per plan, one deterministic client order ID/idempotency key per attempt, one atomic pending-to-submitting claim, and unique sanitized receipt-inbox records prevent application-level duplicate submission.
+- Ambiguity: a timeout, unknown broker response, stale `Submitting` state after restart, or receipt uniqueness conflict is never retried automatically; it moves the batch to `ReconciliationRequired` for Milestone 3.
+- Cash: every remaining buy is reserved against fresh cash/buying power after the cash floor. Same-batch sell proceeds are excluded because this project targets the cash Agentic account.
+- API/UI: `GET /api/trade-plans/{id}/execution` returns the durable batch; `POST /api/trade-plans/{id}/execute` requires the plan hash and exact phrase `SUBMIT APPROVED PLAN`. The dashboard exposes preflight, IDs, statuses, and sanitized failures.
+- Authority lock: the persisted policy has no enable-live operation and defaults false; `Robinhood:LiveTradingEnabled` also defaults false. Both must authorize a call, so Milestone 2 remains observational in normal builds.
+- Verification: automated tests cover double execution, concurrent claims, accepted-receipt uniqueness, ambiguous results, stale restart state, broker rejection, open orders, price drift, cash reservation, sell-first order, schema idempotency capability, and market holidays.
 
 ## Milestone 3 — Order lifecycle and reconciliation
 
@@ -266,26 +279,28 @@ Submitted -> PartiallyFilled -> Filled
 
 ### Submission safety
 
-- [ ] Double-click and concurrent approval requests.
-- [ ] Timeout before and after the broker accepts an order.
+- [x] Double-click and concurrent execution requests.
+- [x] Timeout with unknown pre/post-acceptance broker outcome stops without retry.
 - [ ] Duplicate webhook/status events.
 - [ ] Database failure during submission.
-- [ ] Application termination at every order state.
+- [x] Application restart with an unproven stale submission attempt.
 - [ ] Broker throttling and transient failure.
 
 ### Reconciliation
 
 - [ ] Partial fills across multiple updates.
-- [ ] Broker rejection and expiration.
+- [x] Broker rejection stops the remaining submission batch.
+- [ ] Broker expiration.
 - [ ] User cancellation from Robinhood.
-- [ ] Unknown Robinhood-side order.
+- [x] Unknown Robinhood-side open order blocks preflight/submission; lifecycle reconciliation remains pending.
 - [ ] Split or symbol change during an open plan.
 - [ ] Final quantity and cash rounding differences.
 
 ### Risk and failure modes
 
-- [ ] Stale and anomalous quotes.
-- [ ] Buying-power reduction before submission.
+- [x] Stale and materially drifted Robinhood quotes fail closed.
+- [ ] Crossed, anomalous, and redundant-source quote validation (Milestone 4).
+- [x] Buying-power reduction before submission.
 - [ ] Drawdown or daily-loss breaker during a batch.
 - [ ] Correlation/volatility spike.
 - [ ] Robinhood disconnect or token revocation.
@@ -295,9 +310,9 @@ Submitted -> PartiallyFilled -> Filled
 
 Live supervised submission is ready only when all of the following are true:
 
-- [ ] Every order requires an explicit, expiring approval tied to an immutable plan.
-- [ ] Duplicate submission is prevented under retries, concurrency, and restarts.
-- [ ] Fresh preflight checks invalidate stale or materially changed plans.
+- [x] Every order requires an explicit, expiring approval tied to an immutable plan.
+- [x] Duplicate submission is prevented under retries, concurrency, and restarts at the application boundary.
+- [x] Fresh preflight checks invalidate stale or materially changed plans.
 - [ ] Partial fills, rejects, cancellations, and manual broker changes reconcile correctly.
 - [ ] Stale data, disconnected dependencies, and uncertain state always fail closed.
 - [ ] The emergency halt and Robinhood-disconnect procedure are tested.

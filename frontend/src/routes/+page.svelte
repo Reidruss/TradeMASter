@@ -10,7 +10,10 @@
 		type MarketIntelligenceRun,
 		type LivePortfolioPolicySnapshot,
 		type TradePlanView,
+		type LiveExecutionBatchView,
 		TradePlanStatus,
+		LiveExecutionBatchStatus,
+		LiveExecutionAttemptStatus,
 		OrderSide,
 		OrderType
 	} from '$lib/api';
@@ -41,6 +44,10 @@
 	let secondaryApprovalConfirmation = $state('');
 	let rejectionReason = $state('');
 	let hashCopied = $state(false);
+	let executionBatch = $state<LiveExecutionBatchView | null>(null);
+	let executionConfirmation = $state('');
+	let executionPending = $state(false);
+	let executionError = $state<string | null>(null);
 
 	async function loadAllData() {
 		isSyncing = true;
@@ -57,6 +64,7 @@
 			scheduleInfo = sched;
 			livePolicy = policy;
 			tradePlan = latestPlan;
+			executionBatch = latestPlan ? await tradePlanService.getExecution(latestPlan.id) : null;
 			updateCountdown();
 		} catch (err) {
 			console.error('Failed to load portfolio state', err);
@@ -83,6 +91,26 @@
 		return OrderType[type]?.toUpperCase() ?? 'UNKNOWN';
 	}
 
+	function executionStatusLabel(status: LiveExecutionBatchStatus) {
+		return LiveExecutionBatchStatus[status]?.replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase() ?? 'UNKNOWN';
+	}
+
+	function attemptStatusLabel(status: LiveExecutionAttemptStatus) {
+		return LiveExecutionAttemptStatus[status]?.replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase() ?? 'UNKNOWN';
+	}
+
+	function executionStatusClass(status: LiveExecutionBatchStatus) {
+		if (status === LiveExecutionBatchStatus.Submitted) return 'badge-success';
+		if (status === LiveExecutionBatchStatus.PreflightPassed || status === LiveExecutionBatchStatus.Submitting) return 'badge-primary';
+		return 'badge-danger';
+	}
+
+	function attemptStatusClass(status: LiveExecutionAttemptStatus) {
+		if (status === LiveExecutionAttemptStatus.BrokerAccepted) return 'badge-success';
+		if (status === LiveExecutionAttemptStatus.Pending || status === LiveExecutionAttemptStatus.Submitting) return 'badge-primary';
+		return 'badge-danger';
+	}
+
 	async function copyPlanHash() {
 		if (!tradePlan) return;
 		await navigator.clipboard.writeText(tradePlan.planHash);
@@ -103,11 +131,34 @@
 			);
 			approvalConfirmation = '';
 			secondaryApprovalConfirmation = '';
+			executionBatch = await tradePlanService.getExecution(tradePlan.id);
 		} catch (err) {
 			planActionError = err instanceof Error ? err.message : 'The exact plan could not be approved.';
 			try { tradePlan = await tradePlanService.get(tradePlan.id); } catch { /* preserve the visible snapshot */ }
 		} finally {
 			planActionPending = false;
+		}
+	}
+
+	async function executeApprovedPlan() {
+		if (!tradePlan) return;
+		executionPending = true;
+		executionError = null;
+		try {
+			executionBatch = await tradePlanService.execute(
+				tradePlan.id,
+				tradePlan.planHash,
+				executionConfirmation
+			);
+			executionConfirmation = '';
+		} catch (err) {
+			executionError = err instanceof Error ? err.message : 'Fresh broker preflight could not be completed.';
+			try {
+				tradePlan = await tradePlanService.get(tradePlan.id);
+				executionBatch = await tradePlanService.getExecution(tradePlan.id);
+			} catch { /* preserve the visible review state */ }
+		} finally {
+			executionPending = false;
 		}
 	}
 
@@ -192,6 +243,7 @@
 			});
 			if (!isMockRun && marketRun.tradePlanId) {
 				tradePlan = await tradePlanService.get(marketRun.tradePlanId);
+				executionBatch = await tradePlanService.getExecution(marketRun.tradePlanId);
 				approvalConfirmation = '';
 				secondaryApprovalConfirmation = '';
 				rejectionReason = '';
@@ -413,7 +465,49 @@
 			{/if}
 			{#if tradePlan.decisionReason}<p class="plan-decision"><strong>Decision record:</strong> {tradePlan.decisionReason}</p>{/if}
 			{#if planActionError}<p class="policy-error">{planActionError}</p>{/if}
-			<p class="submission-lock"><strong>Review-only milestone:</strong> approval records consent for this exact plan. It does not submit, schedule, or route any Robinhood order. Live submission remains disabled.</p>
+
+			{#if tradePlan.status === TradePlanStatus.Approved || executionBatch}
+				<div class="execution-boundary">
+					<div class="execution-heading">
+						<div><span class="stat-lbl">MILESTONE 2 · DETERMINISTIC BROKER GATE</span><h3>Fresh Preflight & Idempotent Outbox</h3></div>
+						{#if executionBatch}<span class="badge {executionStatusClass(executionBatch.status)}">{executionStatusLabel(executionBatch.status)}</span>{/if}
+					</div>
+					{#if executionBatch}
+						<div class="execution-metrics">
+							<span><small>Preflight</small><strong>{new Date(executionBatch.preflightAtUtc).toLocaleString()}</strong></span>
+							<span><small>Account</small><strong>Agentic ••••{executionBatch.accountLastFour}</strong></span>
+							<span><small>Reserved buys</small><strong>${executionBatch.reservedBuyingPower.toFixed(2)}</strong></span>
+							<span><small>Sell notional</small><strong>${executionBatch.totalSellNotional.toFixed(2)}</strong></span>
+						</div>
+						<p class="execution-reason">{executionBatch.statusReason}</p>
+						<div class="table-wrap compact-table-wrap">
+							<table class="holdings-table compact-table execution-table">
+								<thead><tr><th>Sequence</th><th>Order</th><th>Client order ID</th><th>Idempotency</th><th>Status</th><th>Broker order</th></tr></thead>
+								<tbody>
+									{#each executionBatch.attempts as attempt}
+										<tr>
+											<td class="font-mono">{attempt.sequence + 1}</td>
+											<td><strong>{orderSideLabel(attempt.side)} {attempt.quantity} {attempt.symbol}</strong><small>@ ${attempt.limitPrice.toFixed(2)}</small></td>
+											<td><code>{attempt.clientOrderId}</code></td>
+											<td><code title={attempt.idempotencyKey}>{attempt.idempotencyKey.slice(0, 12)}…</code></td>
+											<td><span class="badge {attemptStatusClass(attempt.status)}">{attemptStatusLabel(attempt.status)}</span>{#if attempt.failureReason}<small class="attempt-failure">{attempt.failureReason}</small>{/if}</td>
+											<td><code>{attempt.brokerOrderId ?? '—'}</code></td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{:else}
+						<p>Refreshes account identity, holdings, open orders, buying power, broker quotes and eligibility; reruns policy and risk; obtains Robinhood pre-trade review; then persists sell-first outbox attempts before any possible order call.</p>
+						<div class="execution-confirm-row">
+							<label>Exact broker-gate phrase<input bind:value={executionConfirmation} autocomplete="off" placeholder="SUBMIT APPROVED PLAN" /></label>
+							<button class="btn btn-primary" type="button" onclick={executeApprovedPlan} disabled={executionPending || executionConfirmation !== 'SUBMIT APPROVED PLAN'}>{executionPending ? 'Running fresh preflight…' : 'Run Fresh Broker Preflight'}</button>
+						</div>
+					{/if}
+					{#if executionError}<p class="policy-error">{executionError}</p>{/if}
+				</div>
+			{/if}
+			<p class="submission-lock"><strong>Authority lock:</strong> the preflight adapter and durable submission outbox are implemented, but persisted and application live authority both remain disabled. Current operation can validate and record a blocked batch; it cannot route a Robinhood order.</p>
 		{:else}
 			<p class="text-muted">A risk-approved live analysis will persist an exact account snapshot, allocation, order set, policy version, provenance, expiry, and SHA-256 hash here. Mock runs never create approval plans.</p>
 		{/if}
@@ -791,6 +885,58 @@
 		color: var(--text-primary);
 	}
 	.plan-decision { color: var(--text-secondary); }
+	.execution-boundary {
+		display: flex;
+		flex-direction: column;
+		gap: 0.8rem;
+		padding: 0.9rem;
+		border: 1px solid rgba(56, 189, 248, 0.3);
+		border-radius: var(--radius-sm);
+		background: rgba(56, 189, 248, 0.035);
+	}
+	.execution-heading,
+	.execution-confirm-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+	.execution-heading h3 { margin: 0.2rem 0 0; font-size: 0.98rem; }
+	.execution-metrics {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+		gap: 0.55rem;
+	}
+	.execution-metrics span {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		padding: 0.55rem;
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-sm);
+		background: var(--bg-canvas);
+	}
+	.execution-metrics small,
+	.execution-table td small { display: block; color: var(--text-muted); }
+	.execution-reason { margin: 0; color: var(--text-secondary); }
+	.execution-table code { font-size: 0.67rem; overflow-wrap: anywhere; }
+	.attempt-failure { max-width: 18rem; margin-top: 0.25rem; color: var(--danger) !important; line-height: 1.3; }
+	.execution-confirm-row label {
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		gap: 0.3rem;
+		font-size: 0.72rem;
+		color: var(--text-muted);
+	}
+	.execution-confirm-row input {
+		width: 100%;
+		padding: 0.65rem 0.75rem;
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-sm);
+		background: var(--bg-surface-elevated);
+		color: var(--text-primary);
+	}
 	.submission-lock { padding: 0.65rem 0.75rem; border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--warning); font-size: 0.78rem; }
 	.policy-heading,
 	.policy-action-row {
@@ -828,7 +974,9 @@
 	.policy-error { color: var(--danger); }
 	@media (max-width: 720px) {
 		.policy-heading,
-		.policy-action-row { align-items: stretch; flex-direction: column; }
+		.policy-action-row,
+		.execution-heading,
+		.execution-confirm-row { align-items: stretch; flex-direction: column; }
 		.policy-action-row input { width: 100%; min-width: 0; }
 		.plan-review-grid,
 		.approval-boundary { grid-template-columns: 1fr; }
