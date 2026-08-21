@@ -79,11 +79,15 @@ The dashboard review gate requires the exact phrase `APPROVE EXACT PLAN` for tha
 
 Plan review is available through `GET /api/trade-plans/latest`, `GET /api/trade-plans/{id}`, `POST /api/trade-plans/{id}/approve`, and `POST /api/trade-plans/{id}/reject`. Approval records a review decision only and never routes an order.
 
-### Broker preflight and idempotent submission boundary
+### Broker preflight, lifecycle, and reconciliation boundary
 
 An approved plan can enter a second, explicit broker gate using the exact phrase `SUBMIT APPROVED PLAN`. The backend refreshes the Agentic account, holdings, open orders, buying power, quotes, and symbol eligibility; verifies the immutable hash, expiry, policy, market session, risk, price/position drift, and aggregate cash reserve; obtains Robinhood's order review; then stores deterministic sell-first attempts in a durable outbox. Broker requests and receipts are sanitized, use stable client order IDs, and are protected by uniqueness constraints plus a transactional receipt inbox.
 
-The dashboard shows this batch through `GET /api/trade-plans/{id}/execution`; `POST /api/trade-plans/{id}/execute` runs the gate. In normal builds it ends as `SubmissionBlocked`: the persisted live policy and `Robinhood:LiveTradingEnabled` are both false, with no API that can enable the persisted authority. Unknown broker outcomes are never automatically retried. Fill, cancellation, partial-fill, and restart reconciliation remain Milestone 3, so the project is still **not ready for real-money management**.
+The dashboard shows this batch through `GET /api/trade-plans/{id}/execution`; `POST /api/trade-plans/{id}/execute` runs the gate, and `POST /api/trade-plans/{id}/execution/reconcile` performs an immediate lifecycle refresh. A background worker also reconciles active batches every 15 seconds after startup. Only one order may be active at a time, allowing each material fill to refresh cash, buying power, holdings, open orders, concentration, sector, daily-loss, volatility, VaR, drawdown, halt, and policy-version evidence before another order advances.
+
+Robinhood order observations are stored as append-only sanitized events. Partial fills, cancellations, expirations, rejects, and client/broker-ID recovery are reflected durably. Unknown orders or symbol/side/quantity/limit divergence require manual intervention and block new live activity. Timed-out orders are cancelled by exact broker ID and never automatically replaced. Terminal batches verify final quantities within `0.000001` share, cash within `$0.05`, and zero open equity orders.
+
+In normal builds execution still ends as `SubmissionBlocked`: the persisted live policy and `Robinhood:LiveTradingEnabled` are both false, with no API that can enable the persisted authority. Milestone 3 is implemented, but Milestones 4–6 still contain required launch gates, so the project remains **not ready for real-money management**.
 
 ### Data provenance and remaining model risk
 

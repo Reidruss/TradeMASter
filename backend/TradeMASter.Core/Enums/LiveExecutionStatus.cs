@@ -7,7 +7,12 @@ public enum LiveExecutionBatchStatus
     Submitting = 2,
     Submitted = 3,
     Failed = 4,
-    ReconciliationRequired = 5
+    ReconciliationRequired = 5,
+    PartiallyFilled = 6,
+    CancelPending = 7,
+    Completed = 8,
+    Cancelled = 9,
+    Expired = 10
 }
 
 public enum LiveExecutionAttemptStatus
@@ -17,7 +22,12 @@ public enum LiveExecutionAttemptStatus
     BrokerAccepted = 2,
     BrokerRejected = 3,
     ReconciliationRequired = 4,
-    Skipped = 5
+    Skipped = 5,
+    PartiallyFilled = 6,
+    Filled = 7,
+    CancelPending = 8,
+    Cancelled = 9,
+    Expired = 10
 }
 
 public enum BrokerSubmissionOutcome

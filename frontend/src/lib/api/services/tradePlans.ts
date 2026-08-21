@@ -23,5 +23,8 @@ export const tradePlanService = {
 		api.post<LiveExecutionBatchView>(`/api/trade-plans/${id}/execute`, {
 			planHash,
 			confirmation
-		})
+		}),
+
+	reconcile: (id: string) =>
+		api.post<LiveExecutionBatchView>(`/api/trade-plans/${id}/execution/reconcile`, {})
 };

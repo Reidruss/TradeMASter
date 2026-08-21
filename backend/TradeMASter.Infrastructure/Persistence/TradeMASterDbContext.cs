@@ -18,6 +18,8 @@ public class TradeMASterDbContext : DbContext, IUnitOfWork
     public DbSet<LiveExecutionBatch> LiveExecutionBatches => Set<LiveExecutionBatch>();
     public DbSet<LiveExecutionOrderAttempt> LiveExecutionOrderAttempts => Set<LiveExecutionOrderAttempt>();
     public DbSet<LiveExecutionBrokerInbox> LiveExecutionBrokerInbox => Set<LiveExecutionBrokerInbox>();
+    public DbSet<LiveExecutionOrderEvent> LiveExecutionOrderEvents => Set<LiveExecutionOrderEvent>();
+    public DbSet<LiveExecutionReconciliationState> LiveExecutionReconciliationStates => Set<LiveExecutionReconciliationState>();
 
     public TradeMASterDbContext(DbContextOptions<TradeMASterDbContext> options) : base(options)
     {

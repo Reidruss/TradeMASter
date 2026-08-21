@@ -63,6 +63,31 @@ public record BrokerOrderSubmission(
     string Message,
     string SanitizedResponseJson);
 
+public record BrokerOrderLifecycleSnapshot(
+    string BrokerOrderId,
+    Guid? ClientOrderId,
+    string Symbol,
+    OrderSide Side,
+    decimal OrderedQuantity,
+    decimal FilledQuantity,
+    decimal? AverageFillPrice,
+    decimal? LimitPrice,
+    string State,
+    DateTime CreatedAtUtc,
+    DateTime UpdatedAtUtc,
+    string SanitizedPayloadJson);
+
+public record BrokerOrderHistorySnapshot(
+    string AccountNumber,
+    DateTime AsOfUtc,
+    IReadOnlyList<BrokerOrderLifecycleSnapshot> Orders);
+
+public record BrokerCancelResult(
+    BrokerSubmissionOutcome Outcome,
+    string BrokerState,
+    string Message,
+    string SanitizedResponseJson);
+
 public interface IRobinhoodLiveExecutionAdapter
 {
     Task<Result<BrokerExecutionSnapshot>> GetFreshPreflightSnapshotAsync(
@@ -73,6 +98,12 @@ public interface IRobinhoodLiveExecutionAdapter
         CancellationToken cancellationToken = default);
     Task<BrokerOrderSubmission> PlaceOrderAsync(
         BrokerOrderCommand command,
+        CancellationToken cancellationToken = default);
+    Task<Result<BrokerOrderHistorySnapshot>> GetOrderHistoryAsync(
+        DateTime sinceUtc,
+        CancellationToken cancellationToken = default);
+    Task<BrokerCancelResult> CancelOrderAsync(
+        string brokerOrderId,
         CancellationToken cancellationToken = default);
 }
 
@@ -107,7 +138,11 @@ public record LiveExecutionAttemptView(
     string? FailureReason,
     string SanitizedRequestJson,
     string? SanitizedReviewJson,
-    string? SanitizedResponseJson);
+    string? SanitizedResponseJson,
+    string? BrokerState,
+    decimal FilledQuantity,
+    decimal? AverageFillPrice,
+    DateTime? LastReconciledAtUtc);
 
 public record LiveExecutionBatchView(
     Guid Id,
@@ -121,7 +156,14 @@ public record LiveExecutionBatchView(
     decimal TotalSellNotional,
     string? StatusReason,
     DateTime? SubmittedAtUtc,
-    IReadOnlyList<LiveExecutionAttemptView> Attempts);
+    IReadOnlyList<LiveExecutionAttemptView> Attempts,
+    DateTime? LastReconciledAtUtc,
+    string? LatestRiskSnapshotJson,
+    string? FinalSnapshotJson,
+    bool FinalPortfolioVerified,
+    string? InterventionReason);
+
+public record ReconcileLiveExecutionRequest(string? Confirmation = null);
 
 public interface ILiveExecutionService
 {
@@ -130,4 +172,13 @@ public interface ILiveExecutionService
         Guid tradePlanId,
         ExecuteApprovedTradePlanRequest request,
         CancellationToken cancellationToken = default);
+    Task<Result<LiveExecutionBatchView>> ReconcileAsync(
+        Guid tradePlanId,
+        CancellationToken cancellationToken = default);
+}
+
+public interface ILiveExecutionReconciliationService
+{
+    Task<Result<LiveExecutionBatchView>> ReconcileBatchAsync(Guid batchId, CancellationToken cancellationToken = default);
+    Task<int> ReconcileActiveBatchesAsync(CancellationToken cancellationToken = default);
 }

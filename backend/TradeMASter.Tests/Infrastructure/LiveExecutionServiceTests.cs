@@ -98,8 +98,179 @@ public sealed class LiveExecutionServiceTests
         var result = await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
 
         result.IsSuccess.Should().BeTrue(result.Error);
-        fixture.Adapter.Placed.Select(item => item.Side).Should().Equal(OrderSide.Sell, OrderSide.Buy);
+        fixture.Adapter.Placed.Select(item => item.Side).Should().Equal(OrderSide.Sell);
         result.Value.Attempts.Select(item => item.Side).Should().Equal(OrderSide.Sell, OrderSide.Buy);
+        result.Value.Attempts[1].Status.Should().Be(LiveExecutionAttemptStatus.Pending,
+            "the buy must wait until the sell reaches a reconciled terminal state");
+
+        var sell = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(sell, "broker-order-1", "filled", 2m, 20m)];
+        fixture.Adapter.SnapshotFactory = () => Snapshot([Holding("GM", 1m, 20m)], cash: 890m);
+
+        await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        fixture.Adapter.Placed.Select(item => item.Side).Should().Equal(OrderSide.Sell, OrderSide.Buy);
+    }
+
+    [Fact]
+    public async Task PartialThenFullFill_IsDurableAndFinalPortfolioIsVerified()
+    {
+        await using var fixture = await FixtureAsync(authorityEnabled: true);
+        await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
+        var command = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "broker-order-1", "partially_filled", 1m, 20m)];
+        fixture.Adapter.SnapshotFactory = () => Snapshot([Holding("F", 1m, 20m)], cash: 830m);
+
+        var partial = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        partial.IsSuccess.Should().BeTrue(partial.Error);
+        partial.Value.Status.Should().Be(LiveExecutionBatchStatus.PartiallyFilled);
+        partial.Value.Attempts[0].Status.Should().Be(LiveExecutionAttemptStatus.PartiallyFilled);
+        partial.Value.Attempts[0].FilledQuantity.Should().Be(1m);
+        partial.Value.LatestRiskSnapshotJson.Should().Contain("remainingBuysAllowed");
+
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "broker-order-1", "filled", 2m, 20m)];
+        fixture.Adapter.SnapshotFactory = () => Snapshot([Holding("F", 2m, 20m)], cash: 810m);
+
+        var completed = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        completed.Value.Status.Should().Be(LiveExecutionBatchStatus.Completed);
+        completed.Value.Attempts[0].Status.Should().Be(LiveExecutionAttemptStatus.Filled);
+        completed.Value.FinalPortfolioVerified.Should().BeTrue();
+        completed.Value.FinalSnapshotJson.Should().Contain("quantityTolerance").And.Contain("cashTolerance");
+        (await fixture.Db.LiveExecutionOrderEvents.CountAsync()).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RobinhoodSideCancellation_IsReflectedAndFinalStateVerified()
+    {
+        await using var fixture = await FixtureAsync(authorityEnabled: true);
+        await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
+        var command = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "broker-order-1", "cancelled", 0m, null)];
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        result.Value.Status.Should().Be(LiveExecutionBatchStatus.Cancelled);
+        result.Value.Attempts[0].Status.Should().Be(LiveExecutionAttemptStatus.Cancelled);
+        result.Value.FinalPortfolioVerified.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UnknownBrokerOrder_RequiresInterventionAndBlocksFutureExposure()
+    {
+        await using var fixture = await FixtureAsync(authorityEnabled: true);
+        await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
+        var command = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [
+            Lifecycle(command, "broker-order-1", "open", 0m, null),
+            new BrokerOrderLifecycleSnapshot("manual-unknown", Guid.NewGuid(), "GM", OrderSide.Buy,
+                1m, 0m, null, 20m, "open", DateTime.UtcNow, DateTime.UtcNow, "{\"state\":\"open\"}")
+        ];
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        result.Value.Status.Should().Be(LiveExecutionBatchStatus.ReconciliationRequired);
+        result.Value.InterventionReason.Should().Contain("Unknown Robinhood order");
+    }
+
+    [Fact]
+    public async Task PostFillCashBreach_CancelsActiveRemainderAndSkipsLaterBuys()
+    {
+        var orders = new[]
+        {
+            new TradePlanOrderSnapshot("F", OrderSide.Buy, OrderType.Limit, 2m, 20m, null, 40m, false),
+            new TradePlanOrderSnapshot("GM", OrderSide.Buy, OrderType.Limit, 2m, 20m, null, 40m, false)
+        };
+        await using var fixture = await FixtureAsync(true, [], orders);
+        await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
+        var command = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "broker-order-1", "partially_filled", 1m, 20m)];
+        fixture.Adapter.SnapshotFactory = () => Snapshot([Holding("F", 1m, 20m)], cash: 150m);
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        result.Value.Status.Should().Be(LiveExecutionBatchStatus.CancelPending);
+        result.Value.Attempts[0].Status.Should().Be(LiveExecutionAttemptStatus.CancelPending);
+        result.Value.Attempts[1].Status.Should().Be(LiveExecutionAttemptStatus.Skipped);
+        fixture.Adapter.Cancelled.Should().Equal("broker-order-1");
+    }
+
+    [Fact]
+    public async Task AmbiguousSubmittingOrder_IsRecoveredByClientOrderIdWithoutDuplicateSubmission()
+    {
+        await using var fixture = await FixtureAsync(authorityEnabled: true);
+        fixture.Adapter.Submissions.Enqueue(new BrokerOrderSubmission(
+            BrokerSubmissionOutcome.Unknown, null, "unknown", "Timed out.", "{\"outcome\":\"unknown\"}"));
+        var executed = await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
+        var command = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "recovered-order", "filled", 2m, 20m)];
+        fixture.Adapter.SnapshotFactory = () => Snapshot([Holding("F", 2m, 20m)], cash: 810m);
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        executed.Value.Status.Should().Be(LiveExecutionBatchStatus.ReconciliationRequired);
+        result.Value.Status.Should().Be(LiveExecutionBatchStatus.Completed);
+        result.Value.Attempts[0].BrokerOrderId.Should().Be("recovered-order");
+        fixture.Adapter.Placed.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task FinalHoldingDivergence_RequiresManualIntervention()
+    {
+        await using var fixture = await FixtureAsync(authorityEnabled: true);
+        await fixture.Service.ExecuteApprovedPlanAsync(fixture.Plan.Id, Request(fixture.Plan));
+        var command = fixture.Adapter.Placed.Single();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "broker-order-1", "filled", 2m, 20m)];
+        fixture.Adapter.SnapshotFactory = () => Snapshot([Holding("F", 1m, 20m)], cash: 810m);
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        result.Value.Status.Should().Be(LiveExecutionBatchStatus.ReconciliationRequired);
+        result.Value.InterventionReason.Should().Contain("quantity differs");
+        result.Value.FinalPortfolioVerified.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DeterministicTimeout_RequestsCancellationAndNeverReplacesOrder()
+    {
+        await using var fixture = await FixtureAsync(authorityEnabled: true);
+        var batch = new LiveExecutionBatch(
+            fixture.Plan.Id, fixture.Plan.PlanHash, "7250", DateTime.UtcNow.AddMinutes(-4),
+            JsonSerializer.Serialize(new
+            {
+                cashAvailable = 850m,
+                holdings = Array.Empty<object>()
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            40m, 40m, 0m, true, null);
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("timeout-attempt"))).ToLowerInvariant();
+        var command = new BrokerOrderCommand("837197250", Guid.NewGuid(), key, "F", OrderSide.Buy, OrderType.Limit, 2m, 20m);
+        var attempt = new LiveExecutionOrderAttempt(
+            batch.Id, 0, command.ClientOrderId, key, "F", OrderSide.Buy, OrderType.Limit,
+            2m, 20m, 40m, "{\"symbol\":\"F\"}", "{\"approved\":true}");
+        var submittedAt = DateTime.UtcNow.AddMinutes(-3);
+        attempt.MarkSubmitting(submittedAt);
+        attempt.MarkAccepted("timeout-order", "{\"state\":\"open\"}", submittedAt);
+        batch.Attempts.Add(attempt);
+        batch.MarkSubmitted(submittedAt);
+        fixture.Db.LiveExecutionBatches.Add(batch);
+        await fixture.Db.SaveChangesAsync();
+        fixture.Adapter.OrderHistoryFactory = () =>
+        [Lifecycle(command, "timeout-order", "open", 0m, null)];
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Plan.Id);
+
+        result.Value.Status.Should().Be(LiveExecutionBatchStatus.CancelPending);
+        fixture.Adapter.Cancelled.Should().Equal("timeout-order");
+        fixture.Adapter.Placed.Should().BeEmpty("automatic replacement remains disabled");
     }
 
     [Fact]
@@ -398,12 +569,33 @@ public sealed class LiveExecutionServiceTests
             0m);
     }
 
+    private static BrokerOrderLifecycleSnapshot Lifecycle(
+        BrokerOrderCommand command,
+        string brokerOrderId,
+        string state,
+        decimal filledQuantity,
+        decimal? averagePrice) => new(
+        brokerOrderId,
+        command.ClientOrderId,
+        command.Symbol,
+        command.Side,
+        command.Quantity,
+        filledQuantity,
+        averagePrice,
+        command.LimitPrice,
+        state,
+        DateTime.UtcNow,
+        DateTime.UtcNow,
+        JsonSerializer.Serialize(new { brokerOrderId, command.ClientOrderId, command.Symbol, command.Side, state, filledQuantity }));
+
     private sealed class FakeExecutionAdapter : IRobinhoodLiveExecutionAdapter
     {
         public Func<BrokerExecutionSnapshot> SnapshotFactory { get; set; } = () => Snapshot([]);
         public List<BrokerOrderCommand> Reviewed { get; } = [];
         public List<BrokerOrderCommand> Placed { get; } = [];
         public Queue<BrokerOrderSubmission> Submissions { get; } = new();
+        public Func<IReadOnlyList<BrokerOrderLifecycleSnapshot>>? OrderHistoryFactory { get; set; }
+        public List<string> Cancelled { get; } = [];
 
         public Task<Result<BrokerExecutionSnapshot>> GetFreshPreflightSnapshotAsync(
             IReadOnlyList<string> symbols,
@@ -426,6 +618,29 @@ public sealed class LiveExecutionServiceTests
                 ? Submissions.Dequeue()
                 : new BrokerOrderSubmission(BrokerSubmissionOutcome.Accepted, $"broker-order-{Placed.Count}", "open", "Accepted.",
                     $"{{\"brokerOrderId\":\"broker-order-{Placed.Count}\",\"state\":\"open\"}}"));
+        }
+
+        public Task<Result<BrokerOrderHistorySnapshot>> GetOrderHistoryAsync(
+            DateTime sinceUtc,
+            CancellationToken cancellationToken = default)
+        {
+            var orders = OrderHistoryFactory?.Invoke() ?? Placed.Select((command, index) =>
+                new BrokerOrderLifecycleSnapshot(
+                    $"broker-order-{index + 1}", command.ClientOrderId, command.Symbol, command.Side,
+                    command.Quantity, 0m, null, command.LimitPrice, "open",
+                    DateTime.UtcNow, DateTime.UtcNow,
+                    $"{{\"brokerOrderId\":\"broker-order-{index + 1}\",\"state\":\"open\"}}"))
+                .ToList();
+            return Task.FromResult(Result.Success(new BrokerOrderHistorySnapshot("837197250", DateTime.UtcNow, orders)));
+        }
+
+        public Task<BrokerCancelResult> CancelOrderAsync(
+            string brokerOrderId,
+            CancellationToken cancellationToken = default)
+        {
+            Cancelled.Add(brokerOrderId);
+            return Task.FromResult(new BrokerCancelResult(
+                BrokerSubmissionOutcome.Accepted, "cancel_pending", "Accepted.", "{\"state\":\"cancel_pending\"}"));
         }
     }
 

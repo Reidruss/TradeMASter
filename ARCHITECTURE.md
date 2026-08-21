@@ -222,6 +222,12 @@ sequenceDiagram
 
 ## 5. Domain Models & REST API Endpoints
 
+### 5.0 Supervised live-execution safety path
+
+Live order authority is isolated from research agents. Approved immutable plans pass through fresh deterministic preflight, a unique client-ID-bound outbox, and a single-active-order lifecycle. A hosted reconciler resumes active batches after startup, polls Robinhood order history, records append-only sanitized lifecycle events, re-evaluates portfolio risk after fills, and advances the next order only after a proven terminal state. Unknown or divergent broker state blocks all new live activity. Final completion requires exact fill-derived holdings, cash within `$0.05`, quantity within `0.000001` share, and no open equity orders. Both live-authority switches remain disabled by default.
+
+The lifecycle endpoints are `GET /api/trade-plans/{id}/execution`, `POST /api/trade-plans/{id}/execute`, and `POST /api/trade-plans/{id}/execution/reconcile`.
+
 ### 5.1 REST Endpoint Catalog
 
 | Endpoint Group | Method & Route | Description |

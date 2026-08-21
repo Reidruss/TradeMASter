@@ -97,6 +97,7 @@ app.MapGet("/api", () => Results.Json(new
         "/api/robinhood/holdings",
         "/api/optimizer/schedule",
         "/api/trade-plans/latest",
+        "/api/trade-plans/{id}/execution/reconcile",
         "/api/portfolio",
         "/api/agents/history",
         "/api/backtest/strategies"

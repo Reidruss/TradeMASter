@@ -171,6 +171,8 @@ public class LiveExecutionBatchConfiguration : IEntityTypeConfiguration<LiveExec
         builder.Property(item => item.TotalSellNotional).HasPrecision(18, 4);
         builder.Property(item => item.StatusReason).HasMaxLength(1000);
         builder.HasMany(item => item.Attempts).WithOne().HasForeignKey(item => item.BatchId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(item => item.ReconciliationState).WithOne().HasForeignKey<LiveExecutionReconciliationState>(item => item.BatchId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }
 
@@ -193,6 +195,38 @@ public class LiveExecutionOrderAttemptConfiguration : IEntityTypeConfiguration<L
         builder.Property(item => item.SanitizedResponseJson);
         builder.Property(item => item.BrokerOrderId).HasMaxLength(200);
         builder.Property(item => item.FailureReason).HasMaxLength(1000);
+        builder.HasMany(item => item.Events).WithOne().HasForeignKey(item => item.AttemptId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class LiveExecutionOrderEventConfiguration : IEntityTypeConfiguration<LiveExecutionOrderEvent>
+{
+    public void Configure(EntityTypeBuilder<LiveExecutionOrderEvent> builder)
+    {
+        builder.HasKey(item => item.Id);
+        builder.HasIndex(item => item.EventKey).IsUnique();
+        builder.HasIndex(item => new { item.AttemptId, item.BrokerUpdatedAtUtc });
+        builder.HasIndex(item => new { item.BatchId, item.ObservedAtUtc });
+        builder.Property(item => item.EventKey).IsRequired().HasMaxLength(64);
+        builder.Property(item => item.BrokerOrderId).IsRequired().HasMaxLength(200);
+        builder.Property(item => item.BrokerState).IsRequired().HasMaxLength(100);
+        builder.Property(item => item.OrderedQuantity).HasPrecision(18, 6);
+        builder.Property(item => item.FilledQuantity).HasPrecision(18, 6);
+        builder.Property(item => item.AverageFillPrice).HasPrecision(18, 4);
+        builder.Property(item => item.SanitizedPayloadJson).IsRequired();
+        builder.HasOne<LiveExecutionBatch>().WithMany().HasForeignKey(item => item.BatchId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class LiveExecutionReconciliationStateConfiguration : IEntityTypeConfiguration<LiveExecutionReconciliationState>
+{
+    public void Configure(EntityTypeBuilder<LiveExecutionReconciliationState> builder)
+    {
+        builder.HasKey(item => item.Id);
+        builder.HasIndex(item => item.BatchId).IsUnique();
+        builder.Property(item => item.InterventionReason).HasMaxLength(1000);
+        builder.HasOne<LiveExecutionBatch>().WithOne(item => item.ReconciliationState)
+            .HasForeignKey<LiveExecutionReconciliationState>(item => item.BatchId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

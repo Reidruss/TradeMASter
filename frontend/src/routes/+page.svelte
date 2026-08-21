@@ -100,14 +100,14 @@
 	}
 
 	function executionStatusClass(status: LiveExecutionBatchStatus) {
-		if (status === LiveExecutionBatchStatus.Submitted) return 'badge-success';
-		if (status === LiveExecutionBatchStatus.PreflightPassed || status === LiveExecutionBatchStatus.Submitting) return 'badge-primary';
+		if (status === LiveExecutionBatchStatus.Completed || status === LiveExecutionBatchStatus.Cancelled || status === LiveExecutionBatchStatus.Expired) return 'badge-success';
+		if (status === LiveExecutionBatchStatus.PreflightPassed || status === LiveExecutionBatchStatus.Submitting || status === LiveExecutionBatchStatus.Submitted || status === LiveExecutionBatchStatus.PartiallyFilled || status === LiveExecutionBatchStatus.CancelPending) return 'badge-primary';
 		return 'badge-danger';
 	}
 
 	function attemptStatusClass(status: LiveExecutionAttemptStatus) {
-		if (status === LiveExecutionAttemptStatus.BrokerAccepted) return 'badge-success';
-		if (status === LiveExecutionAttemptStatus.Pending || status === LiveExecutionAttemptStatus.Submitting) return 'badge-primary';
+		if (status === LiveExecutionAttemptStatus.Filled || status === LiveExecutionAttemptStatus.Cancelled || status === LiveExecutionAttemptStatus.Expired) return 'badge-success';
+		if (status === LiveExecutionAttemptStatus.Pending || status === LiveExecutionAttemptStatus.Submitting || status === LiveExecutionAttemptStatus.BrokerAccepted || status === LiveExecutionAttemptStatus.PartiallyFilled || status === LiveExecutionAttemptStatus.CancelPending) return 'badge-primary';
 		return 'badge-danger';
 	}
 
@@ -157,6 +157,19 @@
 				tradePlan = await tradePlanService.get(tradePlan.id);
 				executionBatch = await tradePlanService.getExecution(tradePlan.id);
 			} catch { /* preserve the visible review state */ }
+		} finally {
+			executionPending = false;
+		}
+	}
+
+	async function reconcileExecution() {
+		if (!tradePlan) return;
+		executionPending = true;
+		executionError = null;
+		try {
+			executionBatch = await tradePlanService.reconcile(tradePlan.id);
+		} catch (err) {
+			executionError = err instanceof Error ? err.message : 'Robinhood lifecycle reconciliation failed closed.';
 		} finally {
 			executionPending = false;
 		}
@@ -469,7 +482,7 @@
 			{#if tradePlan.status === TradePlanStatus.Approved || executionBatch}
 				<div class="execution-boundary">
 					<div class="execution-heading">
-						<div><span class="stat-lbl">MILESTONE 2 · DETERMINISTIC BROKER GATE</span><h3>Fresh Preflight & Idempotent Outbox</h3></div>
+						<div><span class="stat-lbl">MILESTONE 3 · DURABLE ORDER LIFECYCLE</span><h3>Preflight, Outbox & Reconciliation</h3></div>
 						{#if executionBatch}<span class="badge {executionStatusClass(executionBatch.status)}">{executionStatusLabel(executionBatch.status)}</span>{/if}
 					</div>
 					{#if executionBatch}
@@ -478,16 +491,17 @@
 							<span><small>Account</small><strong>Agentic ••••{executionBatch.accountLastFour}</strong></span>
 							<span><small>Reserved buys</small><strong>${executionBatch.reservedBuyingPower.toFixed(2)}</strong></span>
 							<span><small>Sell notional</small><strong>${executionBatch.totalSellNotional.toFixed(2)}</strong></span>
+							<span><small>Last reconciled</small><strong>{executionBatch.lastReconciledAtUtc ? new Date(executionBatch.lastReconciledAtUtc).toLocaleString() : 'Awaiting broker state'}</strong></span>
 						</div>
 						<p class="execution-reason">{executionBatch.statusReason}</p>
 						<div class="table-wrap compact-table-wrap">
 							<table class="holdings-table compact-table execution-table">
-								<thead><tr><th>Sequence</th><th>Order</th><th>Client order ID</th><th>Idempotency</th><th>Status</th><th>Broker order</th></tr></thead>
+								<thead><tr><th>Sequence</th><th>Order / fill</th><th>Client order ID</th><th>Idempotency</th><th>Status</th><th>Broker order</th></tr></thead>
 								<tbody>
 									{#each executionBatch.attempts as attempt}
 										<tr>
 											<td class="font-mono">{attempt.sequence + 1}</td>
-											<td><strong>{orderSideLabel(attempt.side)} {attempt.quantity} {attempt.symbol}</strong><small>@ ${attempt.limitPrice.toFixed(2)}</small></td>
+											<td><strong>{orderSideLabel(attempt.side)} {attempt.quantity} {attempt.symbol}</strong><small>@ ${attempt.limitPrice.toFixed(2)} · filled {attempt.filledQuantity}{attempt.averageFillPrice ? ` @ $${attempt.averageFillPrice.toFixed(2)}` : ''}</small></td>
 											<td><code>{attempt.clientOrderId}</code></td>
 											<td><code title={attempt.idempotencyKey}>{attempt.idempotencyKey.slice(0, 12)}…</code></td>
 											<td><span class="badge {attemptStatusClass(attempt.status)}">{attemptStatusLabel(attempt.status)}</span>{#if attempt.failureReason}<small class="attempt-failure">{attempt.failureReason}</small>{/if}</td>
@@ -496,6 +510,11 @@
 									{/each}
 								</tbody>
 							</table>
+						</div>
+						{#if executionBatch.interventionReason}<p class="policy-error"><strong>Manual intervention required:</strong> {executionBatch.interventionReason}</p>{/if}
+						<div class="execution-confirm-row">
+							<span>{executionBatch.finalPortfolioVerified ? 'Final holdings, cash, and open orders verified within explicit tolerances.' : 'Refresh order history, fills, account risk, and final portfolio evidence.'}</span>
+							<button class="btn btn-primary" type="button" onclick={reconcileExecution} disabled={executionPending}>{executionPending ? 'Reconciling…' : 'Reconcile Now'}</button>
 						</div>
 					{:else}
 						<p>Refreshes account identity, holdings, open orders, buying power, broker quotes and eligibility; reruns policy and risk; obtains Robinhood pre-trade review; then persists sell-first outbox attempts before any possible order call.</p>

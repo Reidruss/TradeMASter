@@ -89,7 +89,10 @@ public static class DependencyInjection
         services.AddScoped<IRobinhoodLiveExecutionAdapter, RobinhoodLiveExecutionAdapter>();
         services.AddScoped<ILiveExecutionAuthority, LiveExecutionAuthority>();
         services.AddSingleton<IUsMarketCalendar, UsEquityMarketCalendar>();
-        services.AddScoped<ILiveExecutionService, LiveExecutionService>();
+        services.AddScoped<LiveExecutionService>();
+        services.AddScoped<ILiveExecutionService>(sp => sp.GetRequiredService<LiveExecutionService>());
+        services.AddScoped<ILiveExecutionReconciliationService>(sp => sp.GetRequiredService<LiveExecutionService>());
+        services.AddHostedService<LiveExecutionReconciliationWorker>();
 
         return services;
     }
@@ -417,5 +420,82 @@ public static class DependencyInjection
               CREATE INDEX IF NOT EXISTS "IX_LiveExecutionBrokerInbox_BatchId_ReceivedAtUtc" ON "LiveExecutionBrokerInbox" ("BatchId", "ReceivedAtUtc");
               """;
         await db.Database.ExecuteSqlRawAsync(executionSql);
+
+        var reconciliationSql = db.Database.IsNpgsql()
+            ? """
+              CREATE TABLE IF NOT EXISTS "LiveExecutionReconciliationStates" (
+                  "Id" uuid NOT NULL PRIMARY KEY,
+                  "CreatedAt" timestamp with time zone NOT NULL,
+                  "UpdatedAt" timestamp with time zone NULL,
+                  "BatchId" uuid NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "LastReconciledAtUtc" timestamp with time zone NULL,
+                  "LatestBrokerSnapshotJson" text NULL,
+                  "LatestRiskSnapshotJson" text NULL,
+                  "FinalSnapshotJson" text NULL,
+                  "FinalPortfolioVerified" boolean NOT NULL,
+                  "InterventionReason" character varying(1000) NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionReconciliationStates_BatchId"
+                  ON "LiveExecutionReconciliationStates" ("BatchId");
+              CREATE TABLE IF NOT EXISTS "LiveExecutionOrderEvents" (
+                  "Id" uuid NOT NULL PRIMARY KEY,
+                  "CreatedAt" timestamp with time zone NOT NULL,
+                  "UpdatedAt" timestamp with time zone NULL,
+                  "BatchId" uuid NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "AttemptId" uuid NOT NULL REFERENCES "LiveExecutionOrderAttempts" ("Id") ON DELETE CASCADE,
+                  "EventKey" character varying(64) NOT NULL,
+                  "BrokerOrderId" character varying(200) NOT NULL,
+                  "BrokerState" character varying(100) NOT NULL,
+                  "OrderedQuantity" numeric(18,6) NOT NULL,
+                  "FilledQuantity" numeric(18,6) NOT NULL,
+                  "AverageFillPrice" numeric(18,4) NULL,
+                  "BrokerUpdatedAtUtc" timestamp with time zone NOT NULL,
+                  "ObservedAtUtc" timestamp with time zone NOT NULL,
+                  "SanitizedPayloadJson" text NOT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderEvents_EventKey" ON "LiveExecutionOrderEvents" ("EventKey");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionOrderEvents_AttemptId_BrokerUpdatedAtUtc"
+                  ON "LiveExecutionOrderEvents" ("AttemptId", "BrokerUpdatedAtUtc");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionOrderEvents_BatchId_ObservedAtUtc"
+                  ON "LiveExecutionOrderEvents" ("BatchId", "ObservedAtUtc");
+              """
+            : """
+              CREATE TABLE IF NOT EXISTS "LiveExecutionReconciliationStates" (
+                  "Id" TEXT NOT NULL PRIMARY KEY,
+                  "CreatedAt" TEXT NOT NULL,
+                  "UpdatedAt" TEXT NULL,
+                  "BatchId" TEXT NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "LastReconciledAtUtc" TEXT NULL,
+                  "LatestBrokerSnapshotJson" TEXT NULL,
+                  "LatestRiskSnapshotJson" TEXT NULL,
+                  "FinalSnapshotJson" TEXT NULL,
+                  "FinalPortfolioVerified" INTEGER NOT NULL,
+                  "InterventionReason" TEXT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionReconciliationStates_BatchId"
+                  ON "LiveExecutionReconciliationStates" ("BatchId");
+              CREATE TABLE IF NOT EXISTS "LiveExecutionOrderEvents" (
+                  "Id" TEXT NOT NULL PRIMARY KEY,
+                  "CreatedAt" TEXT NOT NULL,
+                  "UpdatedAt" TEXT NULL,
+                  "BatchId" TEXT NOT NULL REFERENCES "LiveExecutionBatches" ("Id") ON DELETE CASCADE,
+                  "AttemptId" TEXT NOT NULL REFERENCES "LiveExecutionOrderAttempts" ("Id") ON DELETE CASCADE,
+                  "EventKey" TEXT NOT NULL,
+                  "BrokerOrderId" TEXT NOT NULL,
+                  "BrokerState" TEXT NOT NULL,
+                  "OrderedQuantity" TEXT NOT NULL,
+                  "FilledQuantity" TEXT NOT NULL,
+                  "AverageFillPrice" TEXT NULL,
+                  "BrokerUpdatedAtUtc" TEXT NOT NULL,
+                  "ObservedAtUtc" TEXT NOT NULL,
+                  "SanitizedPayloadJson" TEXT NOT NULL
+              );
+              CREATE UNIQUE INDEX IF NOT EXISTS "IX_LiveExecutionOrderEvents_EventKey" ON "LiveExecutionOrderEvents" ("EventKey");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionOrderEvents_AttemptId_BrokerUpdatedAtUtc"
+                  ON "LiveExecutionOrderEvents" ("AttemptId", "BrokerUpdatedAtUtc");
+              CREATE INDEX IF NOT EXISTS "IX_LiveExecutionOrderEvents_BatchId_ObservedAtUtc"
+                  ON "LiveExecutionOrderEvents" ("BatchId", "ObservedAtUtc");
+              """;
+        await db.Database.ExecuteSqlRawAsync(reconciliationSql);
     }
 }

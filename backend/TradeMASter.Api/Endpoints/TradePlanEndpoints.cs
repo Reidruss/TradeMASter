@@ -92,6 +92,19 @@ public static class TradePlanEndpoints
         .WithName("ExecuteApprovedTradePlan")
         .WithSummary("Run fresh deterministic broker preflight and a durable idempotent outbox; submission remains blocked until both persisted and application authority are enabled");
 
+        group.MapPost("/{id:guid}/execution/reconcile", async (
+            Guid id,
+            [FromServices] ILiveExecutionService service,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await service.ReconcileAsync(id, cancellationToken);
+            return result.IsSuccess
+                ? Results.Ok(result.Value)
+                : Results.Conflict(new { error = result.Error });
+        })
+        .WithName("ReconcileTradePlanLiveExecution")
+        .WithSummary("Refresh Robinhood history, reconcile fills/cancels/divergence, enforce timeouts and post-fill risk, and verify terminal portfolio state");
+
         return group;
     }
 }

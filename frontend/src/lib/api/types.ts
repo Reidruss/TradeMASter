@@ -96,7 +96,12 @@ export enum LiveExecutionBatchStatus {
 	Submitting = 2,
 	Submitted = 3,
 	Failed = 4,
-	ReconciliationRequired = 5
+	ReconciliationRequired = 5,
+	PartiallyFilled = 6,
+	CancelPending = 7,
+	Completed = 8,
+	Cancelled = 9,
+	Expired = 10
 }
 
 export enum LiveExecutionAttemptStatus {
@@ -105,7 +110,12 @@ export enum LiveExecutionAttemptStatus {
 	BrokerAccepted = 2,
 	BrokerRejected = 3,
 	ReconciliationRequired = 4,
-	Skipped = 5
+	Skipped = 5,
+	PartiallyFilled = 6,
+	Filled = 7,
+	CancelPending = 8,
+	Cancelled = 9,
+	Expired = 10
 }
 
 export interface PriceTick {
@@ -609,6 +619,10 @@ export interface LiveExecutionAttemptView {
 	sanitizedRequestJson: string;
 	sanitizedReviewJson?: string | null;
 	sanitizedResponseJson?: string | null;
+	brokerState?: string | null;
+	filledQuantity: number;
+	averageFillPrice?: number | null;
+	lastReconciledAtUtc?: string | null;
 }
 
 export interface LiveExecutionBatchView {
@@ -624,6 +638,11 @@ export interface LiveExecutionBatchView {
 	statusReason?: string | null;
 	submittedAtUtc?: string | null;
 	attempts: LiveExecutionAttemptView[];
+	lastReconciledAtUtc?: string | null;
+	latestRiskSnapshotJson?: string | null;
+	finalSnapshotJson?: string | null;
+	finalPortfolioVerified: boolean;
+	interventionReason?: string | null;
 }
 
 export interface LivePortfolioPolicySnapshot {

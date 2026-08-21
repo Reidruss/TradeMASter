@@ -157,6 +157,70 @@ public sealed class RobinhoodLiveExecutionAdapter(
         }
     }
 
+    public async Task<Result<BrokerOrderHistorySnapshot>> GetOrderHistoryAsync(
+        DateTime sinceUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var accountResult = await robinhoodService.GetExecutionAccountSnapshotAsync(cancellationToken);
+        if (accountResult.IsFailure) return Result.Failure<BrokerOrderHistorySnapshot>(accountResult.Error!);
+        if (accountResult.Value.IsDemoMode)
+            return Result.Failure<BrokerOrderHistorySnapshot>("Demo sessions cannot reconcile live Robinhood orders.");
+        try
+        {
+            var tools = await GetAuthorizedToolsAsync(cancellationToken);
+            var tool = RequiredTool(tools, "get_equity_orders");
+            var observedAt = DateTime.UtcNow;
+            var result = await mcpClient.CallToolAsync(
+                tool.Name,
+                BuildArguments(tool, accountResult.Value.AccountNumber, null, null, sinceUtc),
+                cancellationToken);
+            if (IsToolError(result))
+                return Result.Failure<BrokerOrderHistorySnapshot>("Robinhood order history returned an error; reconciliation fails closed.");
+            var orders = ParseLifecycleOrders(Payload(result), observedAt);
+            return Result.Success(new BrokerOrderHistorySnapshot(
+                accountResult.Value.AccountNumber,
+                observedAt,
+                orders));
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure<BrokerOrderHistorySnapshot>($"Robinhood order-history reconciliation failed closed: {SafeMessage(ex)}");
+        }
+    }
+
+    public async Task<BrokerCancelResult> CancelOrderAsync(
+        string brokerOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(brokerOrderId))
+            return UnknownCancel("A broker order ID is required for deterministic cancellation.");
+        try
+        {
+            var accountResult = await robinhoodService.GetExecutionAccountSnapshotAsync(cancellationToken);
+            if (accountResult.IsFailure || accountResult.Value.IsDemoMode)
+                return UnknownCancel("The live Agentic account could not be proven before cancellation.");
+            var tools = await GetAuthorizedToolsAsync(cancellationToken);
+            var tool = tools.FirstOrDefault(item =>
+                item.Name.Equals("cancel_equity_order", StringComparison.OrdinalIgnoreCase)
+                || item.Name.Equals("cancel_order", StringComparison.OrdinalIgnoreCase));
+            if (tool is null) return UnknownCancel("Robinhood does not expose an equity-order cancellation tool.");
+            var arguments = BuildCancelArguments(tool, accountResult.Value.AccountNumber, brokerOrderId);
+            var result = await mcpClient.CallToolAsync(tool.Name, arguments, cancellationToken);
+            if (IsToolError(result))
+                return new BrokerCancelResult(BrokerSubmissionOutcome.Rejected, "rejected",
+                    "Robinhood rejected the cancellation request.", JsonSerializer.Serialize(new { outcome = "rejected" }));
+            var payload = Payload(result);
+            var state = FindString(payload, "state", "status") ?? "cancel_pending";
+            return new BrokerCancelResult(BrokerSubmissionOutcome.Accepted, state,
+                "Robinhood accepted the cancellation request.",
+                JsonSerializer.Serialize(new { brokerOrderId, state }));
+        }
+        catch
+        {
+            return UnknownCancel("Robinhood cancellation outcome could not be proven; manual reconciliation is required.");
+        }
+    }
+
     private async Task<IReadOnlyList<RobinhoodMcpTool>> GetAuthorizedToolsAsync(CancellationToken cancellationToken)
     {
         var session = await dbContext.RobinhoodSessions.OrderByDescending(item => item.LastConnectedAtUtc)
@@ -235,6 +299,29 @@ public sealed class RobinhoodLiveExecutionAdapter(
         return values;
     }
 
+    private static IReadOnlyDictionary<string, object?> BuildCancelArguments(
+        RobinhoodMcpTool tool,
+        string accountNumber,
+        string brokerOrderId)
+    {
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        if (!tool.InputSchema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
+            return values;
+        foreach (var property in properties.EnumerateObject())
+        {
+            var normalized = Normalize(property.Name);
+            if (normalized is "accountnumber" or "accountid") values[property.Name] = accountNumber;
+            else if (normalized is "orderid" or "brokerorderid" or "id") values[property.Name] = brokerOrderId;
+        }
+        if (tool.InputSchema.TryGetProperty("required", out var required) && required.ValueKind == JsonValueKind.Array)
+        {
+            var missing = required.EnumerateArray().Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item))
+                .FirstOrDefault(item => !values.ContainsKey(item!));
+            if (missing is not null) throw new InvalidOperationException($"Robinhood MCP tool {tool.Name} requires unsupported field {missing}.");
+        }
+        return values;
+    }
+
     private static object PropertyValue(JsonElement schema, object value)
     {
         var type = schema.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
@@ -274,6 +361,54 @@ public sealed class RobinhoodLiveExecutionAdapter(
                 FindDecimal(item, "limit_price", "limitprice", "price"), state));
         }
         return orders;
+    }
+
+    private static IReadOnlyList<BrokerOrderLifecycleSnapshot> ParseLifecycleOrders(JsonElement payload, DateTime observedAt)
+    {
+        var orders = new Dictionary<string, BrokerOrderLifecycleSnapshot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in Objects(payload))
+        {
+            var id = FindDirectString(item, "order_id", "orderid", "id");
+            var symbol = FindDirectString(item, "symbol", "ticker");
+            var state = FindDirectString(item, "state", "status");
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(symbol) || string.IsNullOrWhiteSpace(state)) continue;
+            var rawClientId = FindDirectString(item, "client_order_id", "clientorderid", "idempotency_key");
+            var clientId = Guid.TryParse(rawClientId, out var parsedClientId) ? parsedClientId : (Guid?)null;
+            var ordered = FindDecimal(item, "quantity", "asset_quantity", "shares") ?? 0m;
+            var filled = FindDecimal(item, "filled_quantity", "cumulative_quantity", "executed_quantity")
+                ?? (Normalize(state) == "filled" ? ordered : 0m);
+            var created = FindDate(item, "created_at", "submitted_at", "timestamp") ?? observedAt;
+            var updated = FindDate(item, "updated_at", "last_transaction_at", "filled_at", "cancelled_at") ?? created;
+            var side = string.Equals(FindDirectString(item, "side", "direction"), "sell", StringComparison.OrdinalIgnoreCase)
+                ? OrderSide.Sell : OrderSide.Buy;
+            orders[id] = new BrokerOrderLifecycleSnapshot(
+                id,
+                clientId,
+                symbol.ToUpperInvariant(),
+                side,
+                ordered,
+                filled,
+                FindDecimal(item, "average_price", "average_fill_price", "filled_price"),
+                FindDecimal(item, "limit_price", "limitprice", "price"),
+                state,
+                created,
+                updated,
+                JsonSerializer.Serialize(new
+                {
+                    brokerOrderId = id,
+                    clientOrderId = clientId,
+                    symbol = symbol.ToUpperInvariant(),
+                    side,
+                    orderedQuantity = ordered,
+                    filledQuantity = filled,
+                    averageFillPrice = FindDecimal(item, "average_price", "average_fill_price", "filled_price"),
+                    limitPrice = FindDecimal(item, "limit_price", "limitprice", "price"),
+                    state,
+                    createdAtUtc = created,
+                    updatedAtUtc = updated
+                }));
+        }
+        return orders.Values.OrderBy(item => item.CreatedAtUtc).ToList();
     }
 
     private static decimal ParseDailyFilledNotional(JsonElement payload, DateTime startUtc)
@@ -343,6 +478,10 @@ public sealed class RobinhoodLiveExecutionAdapter(
 
     private static BrokerOrderSubmission Unknown(string message) => new(
         BrokerSubmissionOutcome.Unknown, null, "unknown", message,
+        JsonSerializer.Serialize(new { outcome = "unknown", reconciliationRequired = true }));
+
+    private static BrokerCancelResult UnknownCancel(string message) => new(
+        BrokerSubmissionOutcome.Unknown, "unknown", message,
         JsonSerializer.Serialize(new { outcome = "unknown", reconciliationRequired = true }));
 
     private static bool IsToolError(JsonElement result) =>

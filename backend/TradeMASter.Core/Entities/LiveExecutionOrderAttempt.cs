@@ -23,6 +23,7 @@ public sealed class LiveExecutionOrderAttempt : BaseEntity
     public int AttemptCount { get; private set; }
     public DateTime? LastAttemptAtUtc { get; private set; }
     public string? FailureReason { get; private set; }
+    public List<LiveExecutionOrderEvent> Events { get; private set; } = [];
 
     public LiveExecutionOrderAttempt() { }
 
@@ -94,6 +95,18 @@ public sealed class LiveExecutionOrderAttempt : BaseEntity
         UpdatedAt = utcNow;
     }
 
+    public void RecoverBrokerAcceptance(string brokerOrderId, string sanitizedResponseJson, DateTime utcNow)
+    {
+        if (string.IsNullOrWhiteSpace(brokerOrderId)) throw new ArgumentException("Broker order ID is required.", nameof(brokerOrderId));
+        if (BrokerOrderId is not null && !BrokerOrderId.Equals(brokerOrderId, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Recovered broker order ID conflicts with the persisted receipt.");
+        BrokerOrderId = brokerOrderId.Trim();
+        SanitizedResponseJson = sanitizedResponseJson;
+        Status = LiveExecutionAttemptStatus.BrokerAccepted;
+        FailureReason = null;
+        UpdatedAt = utcNow;
+    }
+
     public void MarkSkipped(string reason, DateTime utcNow)
     {
         if (Status != LiveExecutionAttemptStatus.Pending) return;
@@ -101,6 +114,45 @@ public sealed class LiveExecutionOrderAttempt : BaseEntity
         Status = LiveExecutionAttemptStatus.Skipped;
         UpdatedAt = utcNow;
     }
+
+    public void ApplyBrokerState(string brokerState, decimal filledQuantity, DateTime utcNow)
+    {
+        if (filledQuantity < 0m || filledQuantity > Quantity + 0.000001m)
+            throw new InvalidOperationException("Broker filled quantity is outside the approved order quantity.");
+        var state = NormalizeState(brokerState);
+        Status = state switch
+        {
+            "filled" when filledQuantity + 0.000001m >= Quantity => LiveExecutionAttemptStatus.Filled,
+            "partiallyfilled" or "partialfill" => LiveExecutionAttemptStatus.PartiallyFilled,
+            "cancelpending" or "pendingcancel" => LiveExecutionAttemptStatus.CancelPending,
+            "cancelled" or "canceled" => LiveExecutionAttemptStatus.Cancelled,
+            "expired" => LiveExecutionAttemptStatus.Expired,
+            "rejected" or "failed" => LiveExecutionAttemptStatus.BrokerRejected,
+            "open" or "queued" or "pending" or "confirmed" or "unconfirmed" when filledQuantity > 0m
+                => LiveExecutionAttemptStatus.PartiallyFilled,
+            "open" or "queued" or "pending" or "confirmed" or "unconfirmed"
+                => LiveExecutionAttemptStatus.BrokerAccepted,
+            _ => LiveExecutionAttemptStatus.ReconciliationRequired
+        };
+        FailureReason = Status switch
+        {
+            LiveExecutionAttemptStatus.BrokerRejected => "Robinhood reported the order as rejected or failed.",
+            LiveExecutionAttemptStatus.ReconciliationRequired => $"Unrecognized Robinhood order state '{brokerState}' requires manual intervention.",
+            _ => null
+        };
+        UpdatedAt = utcNow;
+    }
+
+    public void MarkCancelPending(DateTime utcNow)
+    {
+        if (Status is not LiveExecutionAttemptStatus.BrokerAccepted and not LiveExecutionAttemptStatus.PartiallyFilled)
+            throw new InvalidOperationException("Only an active broker order can enter cancel-pending state.");
+        Status = LiveExecutionAttemptStatus.CancelPending;
+        UpdatedAt = utcNow;
+    }
+
+    private static string NormalizeState(string value) =>
+        new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     private static string Normalize(string reason)
     {

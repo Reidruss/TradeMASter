@@ -18,10 +18,10 @@ The objective is not to guarantee investment performance. The objective is to en
 | Persisted live authority policy | Implemented | Phase-one scope, hard ceilings, live-disabled lock, and emergency halt are enforced in deterministic code. |
 | Immutable plans and exact human approval | Implemented | Hash-bound, expiring plans persist the Agentic snapshot, orders, targets, risk, provenance, policy version, and decision record. Approval never routes an order. |
 | Broker preflight and duplicate-safe submission boundary | Implemented, locked | Milestone 2 preflight, durable outbox/inbox, idempotency, drift checks, and fail-closed submission states are implemented. Both live-authority switches remain disabled. |
-| Reconcile and manage live order lifecycle | Not ready | Fill polling, partial-fill/cancel handling, restart reconciliation, final portfolio verification, and operator recovery are Milestone 3. |
+| Reconcile and manage live order lifecycle | Implemented, locked | Durable polling, partial-fill/cancel/expiry handling, restart recovery, divergence detection, post-fill risk gating, and final portfolio verification are implemented. Live authority remains disabled. |
 | Demonstrate strategy performance | Not ready | Walk-forward, shadow-mode, and guarded-pilot evidence is required. |
 
-**Current operating boundary:** real-account analysis, immutable trade-plan review, approval recording, and fresh broker preflight/outbox inspection. Approval alone never submits or schedules orders. The execution endpoint requires a second exact phrase, but production authority remains disabled in both persisted policy and application configuration, so it records a `SubmissionBlocked` batch and cannot call Robinhood's place-order tool. Live execution must remain disabled until every required launch gate in this document passes.
+**Current operating boundary:** real-account analysis, immutable trade-plan review, approval recording, fresh broker preflight/outbox inspection, and durable lifecycle/reconciliation observation. Approval alone never submits or schedules orders. The execution endpoint requires a second exact phrase, but production authority remains disabled in both persisted policy and application configuration, so it records a `SubmissionBlocked` batch and cannot call Robinhood's place-order tool. Live execution must remain disabled until every required launch gate in this document passes.
 
 ## Safety principles
 
@@ -162,7 +162,7 @@ Submitted -> PartiallyFilled -> Filled
 - Preflight: Robinhood account identity, holdings, buying power, order history/open orders, quote timestamps, tradability, exchange, fractional capability, and daily turnover are refreshed before the batch and immediately before each possible submission.
 - Intent: the approved plan hash, policy version, exact quantity, limit price, account suffix, holding set, and drift tolerances are rechecked. Material changes invalidate the plan instead of silently recalculating a different trade.
 - Durability: one batch per plan, one deterministic client order ID/idempotency key per attempt, one atomic pending-to-submitting claim, and unique sanitized receipt-inbox records prevent application-level duplicate submission.
-- Ambiguity: a timeout, unknown broker response, stale `Submitting` state after restart, or receipt uniqueness conflict is never retried automatically; it moves the batch to `ReconciliationRequired` for Milestone 3.
+- Ambiguity: a timeout, unknown broker response, stale `Submitting` state after restart, or receipt uniqueness conflict is never retried automatically; Milestone 3 now attempts proof by broker/client order ID and otherwise preserves `ReconciliationRequired`.
 - Cash: every remaining buy is reserved against fresh cash/buying power after the cash floor. Same-batch sell proceeds are excluded because this project targets the cash Agentic account.
 - API/UI: `GET /api/trade-plans/{id}/execution` returns the durable batch; `POST /api/trade-plans/{id}/execute` requires the plan hash and exact phrase `SUBMIT APPROVED PLAN`. The dashboard exposes preflight, IDs, statuses, and sanitized failures.
 - Authority lock: the persisted policy has no enable-live operation and defaults false; `Robinhood:LiveTradingEnabled` also defaults false. Both must authorize a call, so Milestone 2 remains observational in normal builds.
@@ -172,22 +172,34 @@ Submitted -> PartiallyFilled -> Filled
 
 ### Deliverables
 
-- [ ] Poll or subscribe to Robinhood order status until every order reaches a terminal or intervention state.
-- [ ] Support partial fills, rejects, cancels, expirations, and manual Robinhood-side changes.
-- [ ] Implement deterministic timeout and cancel/replace rules.
-- [ ] Reconcile local orders against Robinhood order history after every restart.
-- [ ] Detect unknown broker orders and local/broker state divergence.
-- [ ] Recompute portfolio risk after each material fill.
-- [ ] Stop remaining buys if fills cause cash or risk limits to change materially.
-- [ ] Verify final holdings, cash, and open orders after the batch completes.
-- [ ] Require manual intervention when reconciliation cannot prove the account state.
+- [x] Poll or subscribe to Robinhood order status until every order reaches a terminal or intervention state.
+- [x] Support partial fills, rejects, cancels, expirations, and manual Robinhood-side changes.
+- [x] Implement deterministic timeout and cancel/replace rules.
+- [x] Reconcile local orders against Robinhood order history after every restart.
+- [x] Detect unknown broker orders and local/broker state divergence.
+- [x] Recompute portfolio risk after each material fill.
+- [x] Stop remaining buys if fills cause cash or risk limits to change materially.
+- [x] Verify final holdings, cash, and open orders after the batch completes.
+- [x] Require manual intervention when reconciliation cannot prove the account state.
 
 ### Acceptance criteria
 
-- Partial fills and Robinhood-side cancellations are reflected correctly.
-- Restarting during any order state recovers without duplication or lost tracking.
-- Unknown or inconsistent orders trigger an alert and block new live activity.
-- The final local portfolio snapshot matches Robinhood within explicit rounding tolerances.
+- [x] Partial fills and Robinhood-side cancellations are reflected correctly.
+- [x] Restarting during any order state recovers without duplication or lost tracking.
+- [x] Unknown or inconsistent orders trigger an alert and block new live activity.
+- [x] The final local portfolio snapshot matches Robinhood within explicit rounding tolerances.
+
+### Milestone-three implementation notes
+
+- Lifecycle: a 15-second hosted reconciliation worker and an operator-triggered endpoint ingest full Robinhood order history into an append-only sanitized event ledger. Broker/client IDs, side, quantity, limit, cumulative fill, average fill price, and state must agree with local intent.
+- Sequencing: only one broker order may be active at a time. Sells remain first; the next attempt cannot leave the outbox until the active attempt reaches a reconciled terminal state and the fresh account passes the post-fill gate.
+- Recovery: startup polling includes `Submitting`, `Submitted`, partial-fill, cancel-pending, and reconciliation-required batches. An ambiguous submission can be recovered only by exactly one matching client or broker order ID; it is never placed again automatically.
+- Timeout: the persisted deterministic timeout requests cancellation of the exact broker order. Automatic replacement remains disabled, so cancellation uncertainty requires manual intervention and a new approved plan for changed intent.
+- Risk: every observation refreshes holdings, cash, buying power, quotes, and open orders; recomputes cash reserve, position, sector, daily-loss, volatility, VaR, drawdown, halt, and policy-version evidence; and cancels/skips remaining buys when limits change materially.
+- Divergence: unknown orders, missing tracked orders, broker-side symbol/side/quantity/limit changes, impossible fill quantities, or account identity changes set `ReconciliationRequired`, persist an intervention reason, and block any new live batch.
+- Completion: final holdings are reconstructed from the exact preflight quantities plus reconciled fills. Robinhood quantities must match within `0.000001` share, cash within `$0.05`, and open equity orders must be zero.
+- API/UI: `POST /api/trade-plans/{id}/execution/reconcile` performs an immediate observation; the dashboard exposes fill quantities, lifecycle states, last reconciliation, final verification, and manual-intervention reasons.
+- Verification: automated tests cover partial/full fills, Robinhood-side cancellation, unknown orders, recovered ambiguous submissions without duplication, post-fill cash stops, deterministic timeout cancellation, sell-before-buy lifecycle sequencing, and final quantity divergence.
 
 ## Milestone 4 — Data, model, and portfolio realism
 
@@ -313,7 +325,7 @@ Live supervised submission is ready only when all of the following are true:
 - [x] Every order requires an explicit, expiring approval tied to an immutable plan.
 - [x] Duplicate submission is prevented under retries, concurrency, and restarts at the application boundary.
 - [x] Fresh preflight checks invalidate stale or materially changed plans.
-- [ ] Partial fills, rejects, cancellations, and manual broker changes reconcile correctly.
+- [x] Partial fills, rejects, cancellations, and manual broker changes reconcile correctly.
 - [ ] Stale data, disconnected dependencies, and uncertain state always fail closed.
 - [ ] The emergency halt and Robinhood-disconnect procedure are tested.
 - [ ] The audit trail reconstructs every decision and account mutation.

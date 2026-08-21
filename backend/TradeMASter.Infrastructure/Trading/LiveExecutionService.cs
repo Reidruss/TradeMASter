@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,15 +16,16 @@ public sealed class LiveExecutionService(
     IRobinhoodLiveExecutionAdapter brokerAdapter,
     ILivePortfolioPolicyService policyService,
     ILiveExecutionAuthority executionAuthority,
-    IUsMarketCalendar marketCalendar) : ILiveExecutionService
+    IUsMarketCalendar marketCalendar) : ILiveExecutionService, ILiveExecutionReconciliationService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> ReconciliationGates = new();
 
     public async Task<Result<LiveExecutionBatchView?>> GetByTradePlanAsync(
         Guid tradePlanId,
         CancellationToken cancellationToken = default)
     {
-        var batch = await dbContext.LiveExecutionBatches.AsNoTracking().Include(item => item.Attempts)
+        var batch = await BatchQuery(asNoTracking: true)
             .SingleOrDefaultAsync(item => item.TradePlanId == tradePlanId, cancellationToken);
         return Result.Success<LiveExecutionBatchView?>(batch is null ? null : ToView(batch));
     }
@@ -53,6 +55,17 @@ public sealed class LiveExecutionService(
             return await InvalidatePlanAsync(plan, "Approved plan expired before broker preflight.", cancellationToken);
 
         var now = DateTime.UtcNow;
+        var unresolved = await dbContext.LiveExecutionBatches.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.TradePlanId != tradePlanId
+            && item.Status != LiveExecutionBatchStatus.SubmissionBlocked
+            && item.Status != LiveExecutionBatchStatus.Completed
+            && item.Status != LiveExecutionBatchStatus.Cancelled
+            && item.Status != LiveExecutionBatchStatus.Expired
+            && item.Status != LiveExecutionBatchStatus.Failed,
+            cancellationToken);
+        if (unresolved is not null)
+            return Result.Failure<LiveExecutionBatchView>(
+                $"Live activity is blocked until execution batch {unresolved.Id} reaches a proven terminal state.");
         var policy = await policyService.GetAsync(cancellationToken);
         if (policy.PolicyVersion != plan.PolicyVersion)
             return await InvalidatePlanAsync(plan, "Persisted live policy changed after plan approval.", cancellationToken);
@@ -91,6 +104,7 @@ public sealed class LiveExecutionService(
             snapshot.CashAvailable,
             snapshot.BuyingPower,
             snapshot.CurrentDailyTurnoverPercent,
+            holdings = snapshot.Holdings.Select(item => new { item.Symbol, item.Quantity, item.CurrentPrice, item.CurrentMarketValue }),
             quotes = snapshot.Quotes.Select(item => new { item.Symbol, item.Price, item.Bid, item.Ask, item.AsOfUtc, item.Source }),
             eligibility = snapshot.Eligibility.Select(item => new { item.Symbol, item.IsTradable, item.SupportsFractionalShares, item.AssetType, item.Exchange, item.Source }),
             openOrderCount = snapshot.OpenOrders.Count
@@ -252,6 +266,11 @@ public sealed class LiveExecutionService(
     {
         if (batch.Status is LiveExecutionBatchStatus.SubmissionBlocked
             or LiveExecutionBatchStatus.Submitted
+            or LiveExecutionBatchStatus.PartiallyFilled
+            or LiveExecutionBatchStatus.CancelPending
+            or LiveExecutionBatchStatus.Completed
+            or LiveExecutionBatchStatus.Cancelled
+            or LiveExecutionBatchStatus.Expired
             or LiveExecutionBatchStatus.Failed
             or LiveExecutionBatchStatus.ReconciliationRequired) return;
         await ProcessOutboxAsync(batch.Id, cancellationToken);
@@ -266,11 +285,16 @@ public sealed class LiveExecutionService(
             batch.MarkSubmitting(DateTime.UtcNow);
             await dbContext.SaveChangesAsync(cancellationToken);
         }
+        if (batch.Attempts.Any(item => item.Status is LiveExecutionAttemptStatus.BrokerAccepted
+            or LiveExecutionAttemptStatus.PartiallyFilled or LiveExecutionAttemptStatus.CancelPending)) return;
         foreach (var attemptId in batch.Attempts.OrderBy(item => item.Sequence).Select(item => item.Id))
         {
             dbContext.ChangeTracker.Clear();
             var attempt = await dbContext.LiveExecutionOrderAttempts.SingleAsync(item => item.Id == attemptId, cancellationToken);
-            if (attempt.Status == LiveExecutionAttemptStatus.BrokerAccepted) continue;
+            if (attempt.Status is LiveExecutionAttemptStatus.Filled or LiveExecutionAttemptStatus.Cancelled
+                or LiveExecutionAttemptStatus.Expired or LiveExecutionAttemptStatus.Skipped) continue;
+            if (attempt.Status is LiveExecutionAttemptStatus.BrokerRejected
+                or LiveExecutionAttemptStatus.ReconciliationRequired) return;
             if (attempt.Status == LiveExecutionAttemptStatus.Submitting)
             {
                 if (attempt.LastAttemptAtUtc < DateTime.UtcNow.AddMinutes(-2))
@@ -343,7 +367,12 @@ public sealed class LiveExecutionService(
                         cancellationToken);
                     return;
                 }
-                continue;
+                dbContext.ChangeTracker.Clear();
+                var submitted = await dbContext.LiveExecutionBatches.SingleAsync(item => item.Id == batchId, cancellationToken);
+                submitted.MarkSubmitted(receivedAt);
+                await dbContext.SaveChangesAsync(cancellationToken);
+                // Milestone 3 deliberately permits only one active order. The reconciler advances the outbox.
+                return;
             }
             if (receipt.Outcome == BrokerSubmissionOutcome.Rejected)
             {
@@ -361,11 +390,9 @@ public sealed class LiveExecutionService(
         dbContext.ChangeTracker.Clear();
         var complete = await dbContext.LiveExecutionBatches.Include(item => item.Attempts)
             .SingleAsync(item => item.Id == batchId, cancellationToken);
-        if (complete.Attempts.All(item => item.Status == LiveExecutionAttemptStatus.BrokerAccepted))
-        {
+        if (complete.Attempts.Any(item => item.Status == LiveExecutionAttemptStatus.BrokerAccepted))
             complete.MarkSubmitted(DateTime.UtcNow);
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<string?> ValidateImmediateSnapshotAsync(
@@ -457,6 +484,445 @@ public sealed class LiveExecutionService(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<Result<LiveExecutionBatchView>> ReconcileAsync(
+        Guid tradePlanId,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await LoadBatchAsync(tradePlanId, cancellationToken);
+        if (batch is null) return Result.Failure<LiveExecutionBatchView>("No live execution batch exists for this trade plan.");
+        return await ReconcileBatchAsync(batch.Id, cancellationToken);
+    }
+
+    public async Task<int> ReconcileActiveBatchesAsync(CancellationToken cancellationToken = default)
+    {
+        var activeIds = await dbContext.LiveExecutionBatches.AsNoTracking()
+            .Where(item => item.Status == LiveExecutionBatchStatus.PreflightPassed
+                || item.Status == LiveExecutionBatchStatus.Submitting
+                || item.Status == LiveExecutionBatchStatus.Submitted
+                || item.Status == LiveExecutionBatchStatus.PartiallyFilled
+                || item.Status == LiveExecutionBatchStatus.CancelPending
+                || item.Status == LiveExecutionBatchStatus.ReconciliationRequired)
+            .OrderBy(item => item.CreatedAt)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken);
+        var reconciled = 0;
+        foreach (var batchId in activeIds)
+        {
+            var result = await ReconcileBatchAsync(batchId, cancellationToken);
+            if (result.IsSuccess) reconciled++;
+        }
+        return reconciled;
+    }
+
+    public async Task<Result<LiveExecutionBatchView>> ReconcileBatchAsync(
+        Guid batchId,
+        CancellationToken cancellationToken = default)
+    {
+        var gate = ReconciliationGates.GetOrAdd(batchId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await ReconcileBatchCoreAsync(batchId, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<Result<LiveExecutionBatchView>> ReconcileBatchCoreAsync(
+        Guid batchId,
+        CancellationToken cancellationToken)
+    {
+        dbContext.ChangeTracker.Clear();
+        var batch = await BatchQuery().SingleOrDefaultAsync(item => item.Id == batchId, cancellationToken);
+        if (batch is null) return Result.Failure<LiveExecutionBatchView>("Live execution batch not found.");
+        if (batch.Status is LiveExecutionBatchStatus.SubmissionBlocked or LiveExecutionBatchStatus.Completed
+            or LiveExecutionBatchStatus.Cancelled or LiveExecutionBatchStatus.Expired)
+            return Result.Success(ToView(batch));
+
+        var symbols = batch.Attempts.Select(item => item.Symbol).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var historyResult = await brokerAdapter.GetOrderHistoryAsync(batch.CreatedAt.AddMinutes(-5), cancellationToken);
+        var accountResult = await brokerAdapter.GetFreshPreflightSnapshotAsync(symbols, cancellationToken);
+        if (historyResult.IsFailure || accountResult.IsFailure)
+            return await RequireInterventionAsync(batch,
+                historyResult.IsFailure ? historyResult.Error! : accountResult.Error!, cancellationToken);
+        var history = historyResult.Value;
+        var account = accountResult.Value;
+        if (!string.Equals(LastFour(history.AccountNumber), batch.AccountLastFour, StringComparison.Ordinal)
+            || !string.Equals(LastFour(account.AccountNumber), batch.AccountLastFour, StringComparison.Ordinal))
+            return await RequireInterventionAsync(batch, "The Agentic account identity changed during reconciliation.", cancellationToken);
+
+        var matchedOrderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var observedAt = DateTime.UtcNow;
+        foreach (var attempt in batch.Attempts.Where(item => item.Status != LiveExecutionAttemptStatus.Pending
+            && item.Status != LiveExecutionAttemptStatus.Skipped))
+        {
+            var matches = history.Orders.Where(order =>
+                    (!string.IsNullOrWhiteSpace(attempt.BrokerOrderId)
+                        && order.BrokerOrderId.Equals(attempt.BrokerOrderId, StringComparison.OrdinalIgnoreCase))
+                    || (order.ClientOrderId.HasValue && order.ClientOrderId.Value == attempt.ClientOrderId))
+                .DistinctBy(item => item.BrokerOrderId, StringComparer.OrdinalIgnoreCase).ToList();
+            if (matches.Count != 1)
+                return await RequireInterventionAsync(batch,
+                    matches.Count == 0
+                        ? $"Robinhood history cannot prove the tracked {attempt.Symbol} order {attempt.ClientOrderId}."
+                        : $"Robinhood history returned conflicting orders for client order ID {attempt.ClientOrderId}.",
+                    cancellationToken);
+            var brokerOrder = matches[0];
+            matchedOrderIds.Add(brokerOrder.BrokerOrderId);
+            var divergence = ValidateBrokerOrder(attempt, brokerOrder);
+            if (divergence is not null) return await RequireInterventionAsync(batch, divergence, cancellationToken);
+            if (attempt.BrokerOrderId is null)
+                attempt.RecoverBrokerAcceptance(brokerOrder.BrokerOrderId, brokerOrder.SanitizedPayloadJson, observedAt);
+
+            var eventKey = Hash($"{attempt.Id:N}|{brokerOrder.BrokerOrderId}|{NormalizeBrokerState(brokerOrder.State)}|{brokerOrder.FilledQuantity}|{brokerOrder.AverageFillPrice}|{brokerOrder.UpdatedAtUtc:O}");
+            if (!attempt.Events.Any(item => item.EventKey == eventKey))
+                dbContext.LiveExecutionOrderEvents.Add(new LiveExecutionOrderEvent(
+                    batch.Id, attempt.Id, eventKey, brokerOrder.BrokerOrderId, brokerOrder.State,
+                    brokerOrder.OrderedQuantity, brokerOrder.FilledQuantity, brokerOrder.AverageFillPrice,
+                    brokerOrder.UpdatedAtUtc, observedAt, brokerOrder.SanitizedPayloadJson));
+            try
+            {
+                attempt.ApplyBrokerState(brokerOrder.State, brokerOrder.FilledQuantity, observedAt);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return await RequireInterventionAsync(batch, $"{attempt.Symbol}: {ex.Message}", cancellationToken);
+            }
+        }
+
+        var unknown = history.Orders.FirstOrDefault(order => order.CreatedAtUtc >= batch.CreatedAt.AddSeconds(-5)
+            && !matchedOrderIds.Contains(order.BrokerOrderId));
+        if (unknown is not null)
+            return await RequireInterventionAsync(batch,
+                $"Unknown Robinhood order {unknown.BrokerOrderId} ({unknown.Symbol}) appeared during this batch.",
+                cancellationToken);
+
+        var policy = await policyService.GetAsync(cancellationToken);
+        var plan = await dbContext.TradePlans.AsNoTracking().SingleAsync(item => item.Id == batch.TradePlanId, cancellationToken);
+        var payload = Deserialize(plan);
+        var (riskJson, buyBlockReason) = EvaluatePostFillRisk(payload, account, policy);
+        var brokerJson = JsonSerializer.Serialize(new
+        {
+            accountLastFour = LastFour(account.AccountNumber),
+            account.AsOfUtc,
+            account.TotalEquity,
+            account.CashAvailable,
+            account.BuyingPower,
+            holdings = account.Holdings.Select(item => new { item.Symbol, item.Quantity, item.CurrentPrice, item.CurrentMarketValue }),
+            openOrders = account.OpenOrders.Select(item => new { item.BrokerOrderId, item.Symbol, item.Side, item.Quantity, item.State }),
+            observedOrders = history.Orders.Count
+        }, JsonOptions);
+        var state = batch.ReconciliationState ?? new LiveExecutionReconciliationState(batch.Id);
+        if (batch.ReconciliationState is null) dbContext.LiveExecutionReconciliationStates.Add(state);
+        state.Record(observedAt, brokerJson, riskJson);
+
+        if (!string.IsNullOrWhiteSpace(buyBlockReason))
+        {
+            foreach (var pendingBuy in batch.Attempts.Where(item => item.Side == OrderSide.Buy
+                && item.Status == LiveExecutionAttemptStatus.Pending))
+                pendingBuy.MarkSkipped($"Post-fill risk gate blocked remaining buys: {buyBlockReason}", observedAt);
+            var activeBuy = batch.Attempts.FirstOrDefault(item => item.Side == OrderSide.Buy
+                && item.Status is LiveExecutionAttemptStatus.BrokerAccepted or LiveExecutionAttemptStatus.PartiallyFilled);
+            if (activeBuy is not null)
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+                return await RequestCancellationAsync(batch.Id, activeBuy.Id,
+                    $"Post-fill risk gate blocked the unfilled remainder: {buyBlockReason}", cancellationToken);
+            }
+        }
+
+        var incompleteSell = batch.Attempts.FirstOrDefault(item => item.Side == OrderSide.Sell
+            && (item.Status is LiveExecutionAttemptStatus.Cancelled or LiveExecutionAttemptStatus.Expired
+                or LiveExecutionAttemptStatus.BrokerRejected)
+            && (item.Events.OrderByDescending(value => value.BrokerUpdatedAtUtc).FirstOrDefault()?.FilledQuantity ?? 0m)
+                + 0.000001m < item.Quantity);
+        if (incompleteSell is not null)
+        {
+            foreach (var pendingBuy in batch.Attempts.Where(item => item.Side == OrderSide.Buy
+                && item.Status == LiveExecutionAttemptStatus.Pending))
+                pendingBuy.MarkSkipped(
+                    $"The preceding {incompleteSell.Symbol} sell did not fill completely; dependent buys require a new approved plan.",
+                    observedAt);
+        }
+
+        var rejected = batch.Attempts.FirstOrDefault(item => item.Status == LiveExecutionAttemptStatus.BrokerRejected);
+        if (rejected is not null)
+        {
+            foreach (var pending in batch.Attempts.Where(item => item.Status == LiveExecutionAttemptStatus.Pending))
+                pending.MarkSkipped("A reconciled broker rejection stopped the remaining batch.", observedAt);
+            batch.MarkFailed(rejected.FailureReason ?? "Robinhood rejected a tracked order.", observedAt);
+        }
+
+        var timedOut = batch.Attempts.FirstOrDefault(item => (item.Status is LiveExecutionAttemptStatus.BrokerAccepted
+                or LiveExecutionAttemptStatus.PartiallyFilled)
+            && item.LastAttemptAtUtc.HasValue
+            && observedAt - item.LastAttemptAtUtc.Value >= TimeSpan.FromSeconds(policy.OrderTimeoutSeconds));
+        if (timedOut is not null)
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return await RequestCancellationAsync(batch.Id, timedOut.Id,
+                $"The {policy.OrderTimeoutSeconds}-second deterministic order timeout elapsed.", cancellationToken);
+        }
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            var entries = string.Join(", ", ex.Entries.Select(item => $"{item.Metadata.ClrType.Name}:{item.State}"));
+            throw new InvalidOperationException($"Reconciliation persistence concurrency conflict: {entries}", ex);
+        }
+        if (batch.Attempts.All(item => IsTerminal(item.Status)))
+            return await VerifyFinalPortfolioAsync(batch.Id, account, payload, cancellationToken);
+
+        var hasPartial = batch.Attempts.Any(item => item.Status == LiveExecutionAttemptStatus.PartiallyFilled);
+        var hasCancel = batch.Attempts.Any(item => item.Status == LiveExecutionAttemptStatus.CancelPending);
+        if (hasCancel) batch.MarkCancelPending(observedAt);
+        else if (hasPartial) batch.MarkPartiallyFilled(observedAt);
+        else if (batch.Status != LiveExecutionBatchStatus.Failed) batch.MarkSubmitted(observedAt);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        if (!hasPartial && !hasCancel
+            && batch.Attempts.All(item => IsTerminal(item.Status) || item.Status == LiveExecutionAttemptStatus.Pending))
+        {
+            await ProcessOutboxAsync(batch.Id, cancellationToken);
+        }
+        dbContext.ChangeTracker.Clear();
+        var refreshed = await BatchQuery(asNoTracking: true).SingleAsync(item => item.Id == batch.Id, cancellationToken);
+        return Result.Success(ToView(refreshed));
+    }
+
+    private async Task<Result<LiveExecutionBatchView>> RequestCancellationAsync(
+        Guid batchId,
+        Guid attemptId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        dbContext.ChangeTracker.Clear();
+        var batch = await BatchQuery().SingleAsync(item => item.Id == batchId, cancellationToken);
+        var attempt = batch.Attempts.Single(item => item.Id == attemptId);
+        if (string.IsNullOrWhiteSpace(attempt.BrokerOrderId))
+            return await RequireInterventionAsync(batch, $"{reason} Cancellation cannot be bound to a broker order ID.", cancellationToken);
+        var cancellation = await brokerAdapter.CancelOrderAsync(attempt.BrokerOrderId, cancellationToken);
+        if (cancellation.Outcome != BrokerSubmissionOutcome.Accepted)
+            return await RequireInterventionAsync(batch,
+                $"{reason} Robinhood cancellation was not proven: {cancellation.Message}", cancellationToken);
+        attempt.MarkCancelPending(DateTime.UtcNow);
+        batch.MarkCancelPending(DateTime.UtcNow);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Result.Success(ToView(batch));
+    }
+
+    private async Task<Result<LiveExecutionBatchView>> VerifyFinalPortfolioAsync(
+        Guid batchId,
+        BrokerExecutionSnapshot account,
+        ImmutableTradePlanPayload payload,
+        CancellationToken cancellationToken)
+    {
+        dbContext.ChangeTracker.Clear();
+        var batch = await BatchQuery().SingleAsync(item => item.Id == batchId, cancellationToken);
+        var expected = ReadPreflightHoldings(batch.PreflightSnapshotJson);
+        if (expected is null)
+            return await RequireInterventionAsync(batch,
+                "The preflight snapshot predates durable holdings capture, so the final portfolio cannot be proven automatically.",
+                cancellationToken);
+        foreach (var attempt in batch.Attempts)
+        {
+            var latest = attempt.Events.OrderByDescending(item => item.BrokerUpdatedAtUtc)
+                .ThenByDescending(item => item.ObservedAtUtc).FirstOrDefault();
+            if (latest is null || latest.FilledQuantity == 0m) continue;
+            expected.TryGetValue(attempt.Symbol, out var current);
+            expected[attempt.Symbol] = current + (attempt.Side == OrderSide.Buy ? latest.FilledQuantity : -latest.FilledQuantity);
+        }
+        var actual = account.Holdings.ToDictionary(item => item.Symbol, item => item.Quantity, StringComparer.OrdinalIgnoreCase);
+        var symbols = expected.Keys.Union(actual.Keys, StringComparer.OrdinalIgnoreCase);
+        var mismatch = symbols.FirstOrDefault(symbol =>
+            Math.Abs(expected.GetValueOrDefault(symbol) - actual.GetValueOrDefault(symbol)) > 0.000001m);
+        if (mismatch is not null)
+            return await RequireInterventionAsync(batch,
+                $"Final {mismatch} quantity differs from reconciled fills by more than 0.000001 share.", cancellationToken);
+        if (account.OpenOrders.Count > 0)
+            return await RequireInterventionAsync(batch, "Robinhood still reports open equity orders after every local order became terminal.", cancellationToken);
+
+        var startingCash = ReadPreflightCash(batch.PreflightSnapshotJson);
+        if (!startingCash.HasValue)
+            return await RequireInterventionAsync(batch, "The exact preflight cash balance is unavailable for final verification.", cancellationToken);
+        var expectedCash = startingCash.Value;
+        foreach (var attempt in batch.Attempts)
+        {
+            var latest = attempt.Events.OrderByDescending(item => item.BrokerUpdatedAtUtc)
+                .ThenByDescending(item => item.ObservedAtUtc).FirstOrDefault();
+            if (latest is null || latest.FilledQuantity == 0m) continue;
+            var price = latest.AverageFillPrice ?? attempt.LimitPrice;
+            expectedCash += (attempt.Side == OrderSide.Sell ? 1m : -1m) * latest.FilledQuantity * price;
+        }
+        if (Math.Abs(expectedCash - account.CashAvailable) > 0.05m)
+            return await RequireInterventionAsync(batch,
+                $"Final cash differs from reconciled fills by more than the explicit $0.05 rounding tolerance.", cancellationToken);
+
+        var finalJson = JsonSerializer.Serialize(new
+        {
+            verifiedAtUtc = DateTime.UtcNow,
+            quantityTolerance = 0.000001m,
+            cashTolerance = 0.05m,
+            expectedCash,
+            actualCash = account.CashAvailable,
+            holdings = actual.OrderBy(item => item.Key).Select(item => new { symbol = item.Key, quantity = item.Value }),
+            openOrderCount = account.OpenOrders.Count
+        }, JsonOptions);
+        var state = batch.ReconciliationState ?? new LiveExecutionReconciliationState(batch.Id);
+        if (batch.ReconciliationState is null) dbContext.LiveExecutionReconciliationStates.Add(state);
+        state.VerifyFinal(finalJson, DateTime.UtcNow);
+        if (batch.Attempts.Any(item => item.Status == LiveExecutionAttemptStatus.BrokerRejected))
+            batch.MarkFailed("A broker rejection was reconciled and the final portfolio was verified.", DateTime.UtcNow);
+        else if (batch.Attempts.Any(item => item.Status == LiveExecutionAttemptStatus.Expired)) batch.MarkExpired(DateTime.UtcNow);
+        else if (batch.Attempts.All(item => item.Status is LiveExecutionAttemptStatus.Cancelled or LiveExecutionAttemptStatus.Skipped))
+            batch.MarkCancelled(DateTime.UtcNow);
+        else batch.MarkCompleted(DateTime.UtcNow);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Result.Success(ToView(batch));
+    }
+
+    private async Task<Result<LiveExecutionBatchView>> RequireInterventionAsync(
+        LiveExecutionBatch batch,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var state = batch.ReconciliationState ?? new LiveExecutionReconciliationState(batch.Id);
+        if (batch.ReconciliationState is null) dbContext.LiveExecutionReconciliationStates.Add(state);
+        state.RequireIntervention(reason, now);
+        batch.MarkReconciliationRequired(reason, now);
+        foreach (var pendingBuy in batch.Attempts.Where(item => item.Side == OrderSide.Buy
+            && item.Status == LiveExecutionAttemptStatus.Pending))
+            pendingBuy.MarkSkipped("Manual intervention is required before new live exposure can continue.", now);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Result.Success(ToView(batch));
+    }
+
+    private static string? ValidateBrokerOrder(LiveExecutionOrderAttempt attempt, BrokerOrderLifecycleSnapshot order)
+    {
+        if (!order.Symbol.Equals(attempt.Symbol, StringComparison.OrdinalIgnoreCase) || order.Side != attempt.Side)
+            return $"Broker order {order.BrokerOrderId} symbol or side diverges from the approved {attempt.Symbol} intent.";
+        if (order.OrderedQuantity <= 0m || Math.Abs(order.OrderedQuantity - attempt.Quantity) > 0.000001m)
+            return $"Broker order {order.BrokerOrderId} quantity diverges from the approved quantity.";
+        if (order.LimitPrice.HasValue && Math.Abs(order.LimitPrice.Value - attempt.LimitPrice) > 0.0001m)
+            return $"Broker order {order.BrokerOrderId} limit price diverges from the approved limit.";
+        if (order.FilledQuantity < 0m || order.FilledQuantity > attempt.Quantity + 0.000001m)
+            return $"Broker order {order.BrokerOrderId} reports an impossible filled quantity.";
+        var prior = attempt.Events.OrderByDescending(item => item.BrokerUpdatedAtUtc)
+            .ThenByDescending(item => item.ObservedAtUtc).FirstOrDefault();
+        if (prior is not null && order.FilledQuantity + 0.000001m < prior.FilledQuantity)
+            return $"Broker order {order.BrokerOrderId} cumulative fill quantity regressed from the prior observation.";
+        if (IsTerminal(attempt.Status) && !IsEquivalentTerminalState(attempt.Status, order.State))
+            return $"Broker order {order.BrokerOrderId} changed after the local lifecycle recorded a terminal state.";
+        return null;
+    }
+
+    private static bool IsEquivalentTerminalState(LiveExecutionAttemptStatus status, string brokerState)
+    {
+        var state = NormalizeBrokerState(brokerState);
+        return status switch
+        {
+            LiveExecutionAttemptStatus.Filled => state == "filled",
+            LiveExecutionAttemptStatus.Cancelled => state is "cancelled" or "canceled",
+            LiveExecutionAttemptStatus.Expired => state == "expired",
+            LiveExecutionAttemptStatus.BrokerRejected => state is "rejected" or "failed",
+            LiveExecutionAttemptStatus.Skipped => true,
+            _ => false
+        };
+    }
+
+    private static (string Json, string? BuyBlockReason) EvaluatePostFillRisk(
+        ImmutableTradePlanPayload payload,
+        BrokerExecutionSnapshot account,
+        LivePortfolioPolicySnapshot policy)
+    {
+        var breaches = new List<string>();
+        var minimumCash = account.TotalEquity * policy.MinimumCashReservePercent / 100m;
+        if (account.CashAvailable + 0.01m < minimumCash) breaches.Add("cash reserve fell below policy");
+        var positions = account.Holdings.Select(item => new
+        {
+            item.Symbol,
+            Weight = account.TotalEquity > 0m ? item.CurrentMarketValue / account.TotalEquity * 100m : 100m
+        }).ToList();
+        var oversized = positions.FirstOrDefault(item => item.Weight > policy.MaxPositionPercent + 0.0001m);
+        if (oversized is not null) breaches.Add($"{oversized.Symbol} exceeded the position limit");
+        var sectors = payload.TargetAllocations.ToDictionary(item => item.Symbol, item => item.Sector, StringComparer.OrdinalIgnoreCase);
+        var unknownSector = account.Holdings.FirstOrDefault(item => !sectors.ContainsKey(item.Symbol));
+        if (unknownSector is not null) breaches.Add($"{unknownSector.Symbol} has no proven sector mapping");
+        var sectorWeights = account.Holdings.Where(item => sectors.ContainsKey(item.Symbol))
+            .GroupBy(item => sectors[item.Symbol], StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                Sector = group.Key,
+                Weight = account.TotalEquity > 0m ? group.Sum(item => item.CurrentMarketValue) / account.TotalEquity * 100m : 100m
+            }).ToList();
+        var oversizedSector = sectorWeights.FirstOrDefault(item => item.Weight > policy.MaxSectorPercent + 0.0001m);
+        if (oversizedSector is not null) breaches.Add($"{oversizedSector.Sector} exceeded the sector limit");
+        var dailyLoss = payload.Account.TotalEquity > 0m && account.TotalEquity < payload.Account.TotalEquity
+            ? (payload.Account.TotalEquity - account.TotalEquity) / payload.Account.TotalEquity * 100m : 0m;
+        if (dailyLoss > policy.MaxDailyLossPercent) breaches.Add("daily loss exceeded policy");
+        if (payload.Risk.ProjectedAnnualizedVolatilityPercent > policy.MaxAnnualizedVolatilityPercent)
+            breaches.Add("projected volatility exceeds policy");
+        if (payload.Risk.ParametricDailyVaR95Percent > policy.MaxDailyVaR95Percent)
+            breaches.Add("projected VaR exceeds policy");
+        if (payload.Risk.HistoricalMaxDrawdownPercent > policy.MaxDrawdownPercent)
+            breaches.Add("historical drawdown exceeds policy");
+        if (policy.EmergencyHaltActive) breaches.Add("emergency halt is active");
+        if (policy.PolicyVersion != payload.PolicyVersion) breaches.Add("live policy version changed");
+        var json = JsonSerializer.Serialize(new
+        {
+            evaluatedAtUtc = DateTime.UtcNow,
+            account.TotalEquity,
+            account.CashAvailable,
+            minimumCash,
+            dailyLossPercent = dailyLoss,
+            positions,
+            sectors = sectorWeights,
+            inheritedForecast = new
+            {
+                payload.Risk.ProjectedAnnualizedVolatilityPercent,
+                payload.Risk.ParametricDailyVaR95Percent,
+                payload.Risk.HistoricalMaxDrawdownPercent
+            },
+            remainingBuysAllowed = breaches.Count == 0,
+            breaches
+        }, JsonOptions);
+        return (json, breaches.Count == 0 ? null : string.Join("; ", breaches));
+    }
+
+    private static Dictionary<string, decimal>? ReadPreflightHoldings(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("holdings", out var holdings) || holdings.ValueKind != JsonValueKind.Array) return null;
+        var result = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in holdings.EnumerateArray())
+        {
+            if (!item.TryGetProperty("symbol", out var symbol) || !item.TryGetProperty("quantity", out var quantity)) continue;
+            var key = symbol.GetString();
+            if (!string.IsNullOrWhiteSpace(key) && quantity.TryGetDecimal(out var value)) result[key] = value;
+        }
+        return result;
+    }
+
+    private static decimal? ReadPreflightCash(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.TryGetProperty("cashAvailable", out var cash) && cash.TryGetDecimal(out var value) ? value : null;
+    }
+
+    private static bool IsTerminal(LiveExecutionAttemptStatus status) => status is
+        LiveExecutionAttemptStatus.Filled or LiveExecutionAttemptStatus.Cancelled
+        or LiveExecutionAttemptStatus.Expired or LiveExecutionAttemptStatus.BrokerRejected
+        or LiveExecutionAttemptStatus.Skipped;
+
+    private static string NormalizeBrokerState(string value) =>
+        new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
     private async Task<Result<LiveExecutionBatchView>> InvalidatePlanAsync(
         TradePlan plan,
         string reason,
@@ -468,8 +934,16 @@ public sealed class LiveExecutionService(
     }
 
     private Task<LiveExecutionBatch?> LoadBatchAsync(Guid tradePlanId, CancellationToken cancellationToken) =>
-        dbContext.LiveExecutionBatches.Include(item => item.Attempts)
+        BatchQuery()
             .SingleOrDefaultAsync(item => item.TradePlanId == tradePlanId, cancellationToken);
+
+    private IQueryable<LiveExecutionBatch> BatchQuery(bool asNoTracking = false)
+    {
+        IQueryable<LiveExecutionBatch> query = dbContext.LiveExecutionBatches;
+        if (asNoTracking) query = query.AsNoTracking();
+        return query.Include(item => item.Attempts).ThenInclude(item => item.Events)
+            .Include(item => item.ReconciliationState);
+    }
 
     private static string? DetectSnapshotDrift(
         ImmutableTradePlanPayload payload,
@@ -517,23 +991,7 @@ public sealed class LiveExecutionService(
         JsonSerializer.Deserialize<ImmutableTradePlanPayload>(plan.PayloadJson, JsonOptions)
         ?? throw new InvalidOperationException("Stored immutable plan payload is invalid.");
 
-    private static LiveExecutionBatchView ToView(LiveExecutionBatch batch) => new(
-        batch.Id,
-        batch.TradePlanId,
-        batch.PlanHash,
-        batch.Status,
-        batch.AccountLastFour,
-        batch.PreflightAtUtc,
-        batch.ReservedBuyingPower,
-        batch.TotalBuyNotional,
-        batch.TotalSellNotional,
-        batch.StatusReason,
-        batch.SubmittedAtUtc,
-        batch.Attempts.OrderBy(item => item.Sequence).Select(item => new LiveExecutionAttemptView(
-            item.Id, item.Sequence, item.ClientOrderId, item.IdempotencyKey, item.Symbol, item.Side, item.Type,
-            item.Quantity, item.LimitPrice, item.EstimatedNotional, item.Status, item.BrokerOrderId,
-            item.AttemptCount, item.LastAttemptAtUtc, item.FailureReason, item.SanitizedRequestJson,
-            item.SanitizedReviewJson, item.SanitizedResponseJson)).ToList());
+    private static LiveExecutionBatchView ToView(LiveExecutionBatch batch) => LiveExecutionViewFactory.Create(batch);
 
     private sealed record PreparedCommand(
         int Sequence,

@@ -17,6 +17,7 @@ public sealed class LiveExecutionBatch : BaseEntity
     public string? StatusReason { get; private set; }
     public DateTime? SubmittedAtUtc { get; private set; }
     public List<LiveExecutionOrderAttempt> Attempts { get; private set; } = [];
+    public LiveExecutionReconciliationState? ReconciliationState { get; private set; }
 
     public LiveExecutionBatch() { }
 
@@ -58,8 +59,43 @@ public sealed class LiveExecutionBatch : BaseEntity
     public void MarkSubmitted(DateTime utcNow)
     {
         Status = LiveExecutionBatchStatus.Submitted;
-        StatusReason = "Every order was accepted by the broker; fill reconciliation is still required.";
-        SubmittedAtUtc = utcNow;
+        StatusReason = "The current sell-first outbox order was accepted by the broker; lifecycle reconciliation is active.";
+        SubmittedAtUtc ??= utcNow;
+        UpdatedAt = utcNow;
+    }
+
+    public void MarkPartiallyFilled(DateTime utcNow)
+    {
+        Status = LiveExecutionBatchStatus.PartiallyFilled;
+        StatusReason = "At least one material fill was reconciled; remaining intent is gated by the fresh account state.";
+        UpdatedAt = utcNow;
+    }
+
+    public void MarkCancelPending(DateTime utcNow)
+    {
+        Status = LiveExecutionBatchStatus.CancelPending;
+        StatusReason = "The deterministic order timeout elapsed and Robinhood cancellation was requested.";
+        UpdatedAt = utcNow;
+    }
+
+    public void MarkCompleted(DateTime utcNow)
+    {
+        Status = LiveExecutionBatchStatus.Completed;
+        StatusReason = "Every order reached a terminal state and the final Robinhood portfolio was verified.";
+        UpdatedAt = utcNow;
+    }
+
+    public void MarkCancelled(DateTime utcNow)
+    {
+        Status = LiveExecutionBatchStatus.Cancelled;
+        StatusReason = "Every order reached a terminal state and the cancelled batch portfolio was verified.";
+        UpdatedAt = utcNow;
+    }
+
+    public void MarkExpired(DateTime utcNow)
+    {
+        Status = LiveExecutionBatchStatus.Expired;
+        StatusReason = "Every order reached a terminal state and at least one broker order expired.";
         UpdatedAt = utcNow;
     }
 
