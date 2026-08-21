@@ -4,7 +4,7 @@
   "private": true,
   "description": "Full-stack ASP.NET Core Minimal API backend and SvelteKit frontend for TradeMASter",
   "scripts": {
-    "dev": "concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev": "dotenv -e .env -- concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cross-env DOTNET_USE_POLLING_FILE_WATCHER=true dotnet watch --non-interactive --project backend/TradeMASter.Api",
     "dev:frontend": "npm run dev --prefix frontend",
     "build": "npm run build:frontend && npm run build:backend",
@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "cross-env": "^10.1.0"
+    "cross-env": "^10.1.0",
+    "dotenv-cli": "^11.0.0"
   }
 }

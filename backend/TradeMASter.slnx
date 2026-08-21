@@ -3,4 +3,5 @@
   <Project Path="TradeMASter.Api/TradeMASter.Api.csproj" />
   <Project Path="TradeMASter.Core/TradeMASter.Core.csproj" />
   <Project Path="TradeMASter.Infrastructure/TradeMASter.Infrastructure.csproj" />
+  <Project Path="TradeMASter.Tests/TradeMASter.Tests.csproj" />
 </Solution>

@@ -1,0 +1,11 @@
+.git
+.agents
+.env
+.vscode
+**/bin
+**/obj
+**/node_modules
+**/.svelte-kit
+frontend/build
+dist
+README.md

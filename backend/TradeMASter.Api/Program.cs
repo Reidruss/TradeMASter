@@ -1,15 +1,28 @@
 using Scalar.AspNetCore;
+using Microsoft.AspNetCore.DataProtection;
+using TradeMASter.Agents;
 using TradeMASter.Api.Endpoints;
+using TradeMASter.Api.Hubs;
 using TradeMASter.Api.Services;
 using TradeMASter.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddDataProtection()
+    .SetApplicationName("TradeMASter");
+
 // Configure Dependency Injection
 builder.Services.AddSingleton<ITodoService, InMemoryTodoService>();
 
-// Configure Infrastructure (Database, EF Core, Cache, Market Data, Paper Broker)
+// Configure Infrastructure (Database, EF Core, Cache, Market Data, Paper Broker, Robinhood)
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// Configure Multi-Agent Committee Intelligence Tier, Backtesting Engine & Bi-Weekly Optimizer
+builder.Services.AddAgentCommittee(builder.Configuration);
+
+// Configure Real-Time Streaming (SignalR Hubs & Tick Broadcaster)
+builder.Services.AddSignalR();
+builder.Services.AddHostedService<MarketTickBroadcaster>();
 
 // Configure OpenAPI
 builder.Services.AddOpenApi();
@@ -57,11 +70,22 @@ app.MapHealthEndpoints();
 app.MapWeatherEndpoints();
 app.MapTodoEndpoints();
 app.MapMarketEndpoints();
+app.MapMarketIntelligenceEndpoints();
 app.MapPortfolioEndpoints();
 app.MapOrderEndpoints();
+app.MapLivePortfolioPolicyEndpoints();
+app.MapTradePlanEndpoints();
+app.MapAgentEndpoints();
+app.MapBacktestEndpoints();
+app.MapRobinhoodEndpoints();
+app.MapOptimizationEndpoints();
 
-// Root landing endpoint if accessed directly via browser
-app.MapGet("/", () => Results.Json(new
+// Map SignalR Real-Time Hubs
+app.MapHub<AgentDebateHub>("/hubs/debate");
+app.MapHub<MarketDataHub>("/hubs/market");
+
+// API metadata endpoint; leave the production root available to the static Svelte application.
+app.MapGet("/api", () => Results.Json(new
 {
     name = "TradeMASter API",
     status = "Online",
@@ -69,11 +93,18 @@ app.MapGet("/", () => Results.Json(new
     endpoints = new[]
     {
         "/api/health",
-        "/api/market/watchlist",
-        "/api/market/quote/NVDA",
-        "/api/market/candles/NVDA",
+        "/api/robinhood/status",
+        "/api/robinhood/holdings",
+        "/api/optimizer/schedule",
+        "/api/trade-plans/latest",
         "/api/portfolio",
-        "/api/orders"
+        "/api/agents/history",
+        "/api/backtest/strategies"
+    },
+    hubs = new[]
+    {
+        "/hubs/debate",
+        "/hubs/market"
     }
 }));
 

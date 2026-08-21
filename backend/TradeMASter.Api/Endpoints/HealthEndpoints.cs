@@ -21,7 +21,8 @@ public static class HealthEndpoints
             [FromServices] IPortfolioRepository portfolioRepo,
             [FromServices] ICacheService cache,
             [FromServices] IMarketDataService marketData,
-            [FromServices] IBrokerClient brokerClient) =>
+            [FromServices] IBrokerClient brokerClient,
+            [FromServices] ILivePortfolioPolicyService livePolicyService) =>
         {
             var components = new Dictionary<string, ComponentStatus>();
 
@@ -63,6 +64,13 @@ public static class HealthEndpoints
 
             // Check Broker
             components["Broker"] = new ComponentStatus("Healthy", $"{brokerClient.BrokerName} Ready");
+
+            var livePolicy = await livePolicyService.GetAsync();
+            components["LiveExecution"] = livePolicy.EmergencyHaltActive
+                ? new ComponentStatus("Warning", $"Emergency halt active: {livePolicy.EmergencyHaltReason}")
+                : new ComponentStatus("Healthy", livePolicy.LiveTradingEnabled
+                    ? $"Supervised live policy v{livePolicy.PolicyVersion} enabled"
+                    : $"Policy v{livePolicy.PolicyVersion} active; live submission disabled");
 
             var overallHealthy = components.Values.All(c => c.Status == "Healthy");
 

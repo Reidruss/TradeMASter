@@ -1,0 +1,14 @@
+{
+  "name": "trademaster-desktop",
+  "version": "1.0.0",
+  "description": "TradeMASter Native Desktop Application Shell",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^34.2.0"
+  }
+}

@@ -23,6 +23,9 @@ backend/**/obj/
 *.suo
 *.userprefs
 appsettings.Production.json
+*.db
+*.db-shm
+*.db-wal
 
 # VS Code / IDE
 .vscode/*

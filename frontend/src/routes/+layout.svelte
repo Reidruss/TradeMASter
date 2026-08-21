@@ -1,12 +1,60 @@
 <script lang="ts">
 	import '../app.css';
+	import { onMount } from 'svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
+	import RobinhoodSplashScreen from '$lib/components/RobinhoodSplashScreen.svelte';
+	import { robinhoodService, type RobinhoodAccountInfo } from '$lib/api';
+	import { robinhoodAccount } from '$lib/stores/robinhood';
 
 	let { children } = $props();
+
+	let rhAccount = $derived($robinhoodAccount);
+	let showSplashScreen = $state(false);
+
+	onMount(() => {
+		(async () => {
+			try {
+				const status = await robinhoodService.getStatus();
+				robinhoodAccount.set(status);
+			} catch {
+				robinhoodAccount.set(null);
+			} finally {
+				// Connection is controlled exclusively by the top-right Navbar button.
+				showSplashScreen = false;
+			}
+		})();
+	});
+
+	function handleConnected(account: RobinhoodAccountInfo) {
+		robinhoodAccount.set(account);
+		showSplashScreen = false;
+	}
+
+	function handleOpenConnectModal() {
+		showSplashScreen = true;
+	}
+
+	async function handleDisconnect() {
+		try {
+			await robinhoodService.disconnect();
+			robinhoodAccount.set(null);
+			showSplashScreen = false;
+		} catch (err) {
+			console.error('Failed to disconnect', err);
+		}
+	}
 </script>
 
 <div class="app-layout">
-	<Navbar />
+	<Navbar
+		rhAccount={rhAccount}
+		onOpenConnect={handleOpenConnectModal}
+		onDisconnect={handleDisconnect}
+	/>
+
+	{#if showSplashScreen}
+		<RobinhoodSplashScreen onConnected={handleConnected} />
+	{/if}
 
 	<main class="main-content">
 		<div class="container">
@@ -17,14 +65,14 @@
 	<footer class="app-footer">
 		<div class="container footer-content">
 			<div class="footer-left">
-				<span>TradeMASter</span>
+				<span class="brand-foot">TradeMASter</span>
 				<span class="sep">•</span>
-				<span class="tech-stack">ASP.NET Core Minimal APIs + SvelteKit</span>
+				<span class="tech-stack">Robinhood Autonomous Multi-Agent Trading System</span>
 			</div>
 			<div class="footer-right">
-				<a href="/scalar/v1" target="_blank" rel="noreferrer">Scalar OpenAPI Docs</a>
+				<span class="mcp-indicator font-mono">MCP: https://agent.robinhood.com/mcp/trading</span>
 				<span class="sep">•</span>
-				<a href="https://svelte.dev/docs" target="_blank" rel="noreferrer">Svelte 5 Docs</a>
+				<a href="/scalar/v1" target="_blank" rel="noreferrer">API Docs</a>
 			</div>
 		</div>
 	</footer>
@@ -39,14 +87,14 @@
 
 	.main-content {
 		flex: 1;
-		padding: 2rem 0 4rem 0;
+		padding: 1.5rem 0 3.5rem 0;
 	}
 
 	.app-footer {
 		border-top: 1px solid var(--border-subtle);
 		background: var(--bg-surface);
-		padding: 1.5rem 0;
-		font-size: 0.85rem;
+		padding: 1.25rem 0;
+		font-size: 0.82rem;
 		color: var(--text-muted);
 	}
 
@@ -65,11 +113,21 @@
 		flex-wrap: wrap;
 	}
 
+	.brand-foot {
+		font-weight: 700;
+		color: var(--text-primary);
+	}
+
+	.mcp-indicator {
+		color: var(--text-muted);
+		font-size: 0.75rem;
+	}
+
 	.sep {
 		color: var(--border-strong);
 	}
 
-	.tech-stack {
-		color: var(--text-secondary);
+	.font-mono {
+		font-family: var(--font-mono);
 	}
 </style>

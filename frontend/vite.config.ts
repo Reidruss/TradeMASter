@@ -1,19 +1,10 @@
-import adapter from '@sveltejs/adapter-auto';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 const backendUrl = process.env.BACKEND_URL || 'http://localhost:5126';
 
 export default defineConfig({
-	plugins: [
-		sveltekit({
-			compilerOptions: {
-				runes: ({ filename }) =>
-					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
-			},
-			adapter: adapter()
-		})
-	],
+	plugins: [sveltekit()],
 	server: {
 		port: 5173,
 		strictPort: false,
@@ -22,6 +13,13 @@ export default defineConfig({
 			'/api': {
 				target: backendUrl,
 				changeOrigin: true,
+				secure: false
+			},
+			// Proxy SignalR WebSockets
+			'/hubs': {
+				target: backendUrl,
+				changeOrigin: true,
+				ws: true,
 				secure: false
 			},
 			// Proxy OpenAPI and Scalar documentation UI
